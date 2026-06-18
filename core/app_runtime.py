@@ -145,22 +145,13 @@ class AppRuntime:
         self._init_backlight(fpioa)
         lv.init()
         self._lvgl_init()
-        # ⚠️ 临时严格基线对齐：face_detect 定位时跳过 touch/fonts/services，
-        # 让 runtime.init_app 尽量等同裸跑 test_face_baseline_camerai_sensor.py。
-        # 若稳定，再逐项加回 touch/fonts/host/UI 定位污染源。
-        if category_id != "face_detect":
-            self._init_touch()
-            from core.font_manager import fonts
-            try:
-                fonts.load_all()
-            except Exception as e:
-                print("[Runtime] font load warning: %s" % e)
-            self._init_services(fpioa)
-        else:
-            self.host = None
-            self.lang = None
-            self.config = None
-            self.buzzer = None
+        self._init_touch()
+        from core.font_manager import fonts
+        try:
+            fonts.load_all()
+        except Exception as e:
+            print("[Runtime] font load warning: %s" % e)
+        self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
         self._sensor_running = True
@@ -180,12 +171,9 @@ class AppRuntime:
         from comm.host_api import HostAPI
         self.config = ConfigManager()
         self.config.load()
-        # ⚠️ 临时定位：不创建 Buzzer（PWM0 硬件），验证 PWM 是否与 NPU/DMA/sensor
-        # 冲突致卡死。验证后恢复。
-        # from hw.buzzer import Buzzer
-        # self.buzzer = Buzzer(fpioa, pinx=60, pwm_ch=0, valid=0)
-        # self.buzzer.set_enabled(self.config.get('buzzer_enabled', True))
-        self.buzzer = None
+        from hw.buzzer import Buzzer
+        self.buzzer = Buzzer(fpioa, pinx=60, pwm_ch=0, valid=0)
+        self.buzzer.set_enabled(self.config.get('buzzer_enabled', True))
         self.lang = LangManager()
         self.lang.load(self.config.get('lang', 'zh_CN'))
         fpioa.set_function(40, FPIOA.UART1_TXD)
