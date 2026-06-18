@@ -18,6 +18,7 @@
 #   - init_features() 改用 np.fromfile()：与 anchors 加载同路径，安全。
 
 _DB_DIR = "/data/fac_db"  # 无尾部斜杠：os.mkdir 在 MicroPython 上可能拒绝 / 结尾
+_NEXT_SLOT_PATH = "/data/fac_db/.next_slot"  # Step 7: 轮转覆盖指针持久化（1-4 循环）
 
 
 class _FaceDB:
@@ -26,6 +27,7 @@ class _FaceDB:
     def __init__(self):
         self._features = {}   # {slot_id: np_array}  运行时使用
         self._loaded = False
+        self._next_slot = 1   # Step 7: 轮转覆盖指针(1-4 循环)，clear()/init_features() 读写
 
     # ── 运行时加载（APP 内 on_enter → _init_db 调用）────
 
@@ -88,15 +90,63 @@ class _FaceDB:
                 continue
             self._features[i] = feature
             print(f"[FaceDB] loaded id{i}.bin ({len(data)//4} floats)")
+        self._load_next_slot()   # Step 7: 读回上次覆盖指针（与读 .bin 同安全窗口）
         self._loaded = True
         print(f"[FaceDB] init_features done: {len(self._features)} face(s)")
         return self._features
+
+    # ── Step 7: 轮转覆盖指针持久化 ──────────────────────
+
+    def _load_next_slot(self):
+        """读 _next_slot 指针文件（init_features 内，与读 .bin 同安全窗口）。
+        文件不存在/损坏 → 默认 1。"""
+        try:
+            with open(_NEXT_SLOT_PATH, 'r') as f:
+                v = int(f.read().strip())
+            self._next_slot = v if 1 <= v <= 4 else 1
+        except Exception:
+            self._next_slot = 1
+
+    def _save_next_slot(self):
+        """写 _next_slot 指针文件（register 内，与 flush_to_disk 同批写盘）。"""
+        try:
+            with open(_NEXT_SLOT_PATH, 'w') as f:
+                f.write(str(self._next_slot))
+        except Exception as e:
+            print("[FaceDB] save next_slot failed: %s" % e)
 
     # ── 运行时读取（零文件 I/O）─────────────────────────
 
     def get_features(self):
         """返回特征字典的引用（APP 直接修改即为内存操作）"""
         return self._features
+
+    # ── Step 7: 注册（轮转覆盖 B + 当场写盘）────────────
+
+    def register(self, feature):
+        """注册特征到 slot（轮转覆盖 B）+ 当场写盘。返回 slot_id(1-4)。
+
+        - 有空 slot：填第一个空 slot（不动 _next_slot 指针）
+        - 无空 slot：覆盖 _next_slot 指向的 slot，指针 +1（1→2→3→4→1）
+        - 写内存后立刻 flush_to_disk() + _save_next_slot()（试法1）
+
+        ⚠️ 坑#2 延伸：register 在 AI 线程运行期执行（试法1 核心验证点），
+        若运行期写盘与 display DMA flush 竞争卡死 → 退化为"主线程
+        task_handler 间隙 flush"（试法2，fallback，本步不实现）。
+        """
+        slot = None
+        for i in range(1, 5):
+            if i not in self._features:
+                slot = i
+                break
+        if slot is None:
+            slot = self._next_slot
+            self._next_slot = self._next_slot % 4 + 1
+        self._features[slot] = feature
+        self.flush_to_disk()
+        self._save_next_slot()
+        print("[FaceDB] registered → id%d (flushed)" % slot)
+        return slot
 
     # ── 退出时刷盘（on_exit 中调用，lv.task_handler 已完成）──
 
@@ -135,6 +185,26 @@ class _FaceDB:
                 pass
         self._features.clear()
         print("[FaceDB] disk cleared")
+
+    def clear(self):
+        """清内存 + 删 .bin + 删 .next_slot + _next_slot 回 1。
+
+        供后续清除按钮用（本步不接 UI，但方法补全）。clear_disk() 只删 .bin，
+        clear() 额外删 .next_slot 并把指针回 1，确保下次注册从 id1 开始。
+        """
+        import os
+        self._features.clear()
+        for i in range(1, 5):
+            try:
+                os.remove(f"{_DB_DIR}/id{i}.bin")
+            except Exception:
+                pass
+        try:
+            os.remove(_NEXT_SLOT_PATH)
+        except Exception:
+            pass
+        self._next_slot = 1
+        print("[FaceDB] cleared (memory + disk + pointer)")
 
 
 # 全局单例
