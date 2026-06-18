@@ -104,6 +104,8 @@ face_reg = None
 running = False
 fc = 0
 db_features = {}  # 人脸特征库 {slot_id: np_array}（Step 3 读入，Step 5 用于识别）
+id_registry = None  # Step 7: K2 注册控制器（run() 初始化，AI 线程 try_register）
+_rt = None  # Step 7: AI 线程访问 runtime.buzzer（face_det_thread 是模块级函数）
 
 
 def ALIGN_UP(x, align=16):
@@ -353,7 +355,7 @@ def lvgl_init():
 
 
 def face_det_thread():
-    global sensor, face_det, running, fc
+    global sensor, face_det, running, fc, _rt
     kmodel_path = "/sdcard/examples/kmodel/face_detection_320.kmodel"
     anchors_path = "/sdcard/examples/utils/prior_data_320.bin"
     anchors = np.fromfile(anchors_path, dtype=np.float)
@@ -383,6 +385,10 @@ def face_det_thread():
                     feature = face_reg.run(img_np)
                     matched_id = database_search(feature, db_features)
                     recognition_results.append((max_i, matched_id))
+                    # Step 7: K2 注册（复用刚提的特征，不重复 NPU 推理）。
+                    # _rt.buzzer=None 守卫：无 buzzer 时静默（id_registry 内部已守卫）。
+                    if id_registry is not None:
+                        id_registry.try_register(feature, _rt.buzzer if _rt else None)
                 except Exception as e:
                     print("[baseline-face] recog error: %s" % e)
             # 十字架（绿色，两条相交线，中心 320,240）
@@ -399,7 +405,8 @@ def face_det_thread():
 
 
 def run(runtime):
-    global running, db_features
+    global running, db_features, _rt
+    _rt = runtime
     print("[baseline-face] run() begin")
     media_init()
     lvgl_init()
@@ -429,11 +436,18 @@ def run(runtime):
         face_reg = None
     gc.collect()
     print("[baseline-face] after face_reg, mem=%d" % gc.mem_free())
+    # Step 7: K2 注册控制器（复用 face_db.register + 轮转覆盖）。
+    # ⚠️ GPIO0 硬件初始化在主线程、AI 线程启动前（与 sensor 配置同窗口）。
+    global id_registry
+    from core.id_registry import IdRegistry
+    id_registry = IdRegistry(runtime.fpioa, pin=0)
     running = True
     time.sleep_ms(100)
     _thread.start_new_thread(face_det_thread, ())
     try:
         while True:
+            os.exitpoint()
+            id_registry.poll_k2()              # Step 7: 主线程 K2 边沿检测
             time.sleep_ms(lv.task_handler())
     except BaseException as e:
         sys.print_exception(e)
