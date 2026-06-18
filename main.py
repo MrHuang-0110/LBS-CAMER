@@ -103,11 +103,7 @@ def run_script(category_id):
     print("[CamerAi] run_script start: %s" % category_id)
     fpioa = FPIOA()
     runtime = AppRuntime()
-    # ⚠️ 临时定位：face_detect 跳过 runtime.init_app，由 face_detect.run() 自己
-    # 全套 init（对齐裸跑 test_face_baseline_camerai_sensor.py）。验证 reset 框架
-    # init_app 是否元凶。验证后恢复。
-    if category_id != "face_detect":
-        runtime.init_app(category_id, fpioa)
+    runtime.init_app(category_id, fpioa)
     print("[CamerAi] loading script module...")
     mod = _load_script(category_id)
     print("[CamerAi] script module=%s has_run=%s" % (mod is not None,
