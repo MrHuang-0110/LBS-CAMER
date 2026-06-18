@@ -1,0 +1,16 @@
+{
+  "id": "face_detect",
+  "version": "1.0.0",
+  "name_key": "category.face_detect",
+  "desc_key": "category.face_detect_desc",
+  "entry_icon": "/sdcard/CamerAi/resource/icons/menu_icon/face_detect.png",
+  "icon_dir": "/sdcard/CamerAi/resource/icons/face_detect_icon/",
+  "models": [
+    "/sdcard/examples/kmodel/face_detection_320.kmodel",
+    "/sdcard/examples/kmodel/face_recognition.kmodel"
+  ],
+  "demo_ref": "实验4 人脸识别实验/main2.py",
+  "ui_mode": "stream",
+  "enabled": true,
+  "order": 3
+}

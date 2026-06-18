@@ -1,0 +1,12 @@
+Font directory: /resource/font/  (board path)
+
+Copy from TF card: /sdcard/CanMV Sample/Fonts/
+
+Required:
+  lv_font_normal_size20_bpp4.bin
+  lv_font_normal_size25_bpp4.bin
+
+Optional:
+  lv_font_normal_bold_size25_bpp4.bin
+
+Keep original demo filenames. font_manager loads from this folder.

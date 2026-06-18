@@ -1,0 +1,90 @@
+<h2>设计 §3 — 图库子页面 + 数据流</h2>
+
+<div class="section">
+  <h3>图库页面布局</h3>
+  <div style="background:#111;border-radius:8px;overflow:hidden;">
+    <div style="background:#1a1a1a;padding:0 8px;display:flex;align-items:center;height:52px;position:relative;">
+      <div style="background:rgba(255,255,255,0.08);border-radius:8px;width:48px;height:48px;display:flex;align-items:center;justify-content:center;"><span style="color:#ccc;">←</span></div>
+      <span style="color:#fff;font-size:16px;position:absolute;left:50%;transform:translateX(-50%);">图库</span>
+    </div>
+    <div style="padding:8px;min-height:400px;">
+      <div style="display:flex;align-items:center;padding:10px;background:#1a1a1a;border-radius:8px;margin-bottom:8px;gap:12px;">
+        <div style="width:64px;height:48px;background:#2a2a2a;border-radius:4px;flex-shrink:0;"></div>
+        <div><div style="color:#fff;font-size:14px;">IMG_20260612_143025.jpg</div><div style="color:#666;font-size:12px;">2026-06-12 14:30</div></div>
+        <div style="margin-left:auto;color:#666;font-size:12px;">📷</div>
+      </div>
+      <div style="display:flex;align-items:center;padding:10px;background:#1a1a1a;border-radius:8px;margin-bottom:8px;gap:12px;">
+        <div style="width:64px;height:48px;background:#2a2a2a;border-radius:4px;flex-shrink:0;"></div>
+        <div><div style="color:#fff;font-size:14px;">IMG_20260612_101512.jpg</div><div style="color:#666;font-size:12px;">2026-06-12 10:15</div></div>
+        <div style="margin-left:auto;color:#666;font-size:12px;">📷</div>
+      </div>
+      <div style="display:flex;align-items:center;padding:10px;background:#1a1a1a;border-radius:8px;margin-bottom:8px;gap:12px;">
+        <div style="width:64px;height:48px;background:#2a2a2a;border-radius:4px;flex-shrink:0;"></div>
+        <div><div style="color:#fff;font-size:14px;">IMG_20260611_182340.jpg</div><div style="color:#666;font-size:12px;">2026-06-11 18:23</div></div>
+        <div style="margin-left:auto;color:#666;font-size:12px;">📷</div>
+      </div>
+    </div>
+  </div>
+  <ul style="margin-top:12px;color:#aaa;font-size:14px;">
+    <li>顶栏同上（返回 + 居中标题「图库」）</li>
+    <li>扫描 <code>/data/photo/</code>，按 mtime 倒序排列</li>
+    <li>每行：缩略图(64×48) + 文件名 + 日期时间</li>
+    <li>垂直滚动列表（lv.obj + SCROLLABLE）</li>
+    <li>点返回 → 回到相机预览，点照片 → 全屏查看</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>数据流</h3>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+    <div style="background:#1a2a1a;border-radius:8px;padding:12px;">
+      <h4 style="margin:0 0 8px;color:#4a4;">📷 拍照流程</h4>
+      <ol style="margin:0;padding-left:18px;color:#aaa;font-size:13px;">
+        <li>按快门 → 蜂鸣 30ms</li>
+        <li>Sensor 捕获当前帧（YUV → JPEG）</li>
+        <li>写入 <code>/data/photo/IMG_YYYYMMDD_HHMMSS.jpg</code></li>
+        <li>屏幕短暂闪烁反馈</li>
+      </ol>
+    </div>
+    <div style="background:#1a1a2a;border-radius:8px;padding:12px;">
+      <h4 style="margin:0 0 8px;color:#48f;">🎬 录像流程</h4>
+      <ol style="margin:0;padding-left:18px;color:#aaa;font-size:13px;">
+        <li>按红圆 → 开始录制</li>
+        <li>每帧编码写入 <code>/data/photo/VID_YYYYMMDD_HHMMSS.avi</code></li>
+        <li>预览区顶部显示计时器 ● 00:00:01...</li>
+        <li>按红方 → 停止录制，关闭文件</li>
+      </ol>
+    </div>
+    <div style="background:#1a1a1a;border-radius:8px;padding:12px;">
+      <h4 style="margin:0 0 8px;color:#888;">🖼 图库加载</h4>
+      <ol style="margin:0;padding-left:18px;color:#aaa;font-size:13px;">
+        <li>进入图库 → <code>os.listdir('/data/photo/')</code></li>
+        <li>过滤 .jpg/.bmp/.avi</li>
+        <li><code>os.stat()</code> 取 mtime，按时间倒序</li>
+        <li>构建 LVGL 列表行</li>
+      </ol>
+    </div>
+    <div style="background:#2a1a1a;border-radius:8px;padding:12px;">
+      <h4 style="margin:0 0 8px;color:#c44;">⚠️ I/O 注意</h4>
+      <ul style="margin:0;padding-left:18px;color:#aaa;font-size:13px;">
+        <li>/data/photo/ 可能是内部 flash（非 SD），不触发 DMA 死锁</li>
+        <li>如遇死锁，退化为内存缓冲 + 退出时批量写入</li>
+        <li>拍照时短时间 I/O，录像时持续 I/O（需验证）</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top:20px;">图库布局和数据流是否正确？</p>
+
+<div class="options">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>OK，可以写设计文档</h3></div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">…</div>
+    <div class="content"><h3>需要调整</h3></div>
+  </div>
+</div>

@@ -1,0 +1,7 @@
+{
+  "boot_logo": "/sdcard/CamerAi/resource/logo.png",
+  "boot_logo_ms": 1500,
+  "lang": "zh_CN",
+  "buzzer_enabled": true,
+  "version": "v0.1.0"
+}

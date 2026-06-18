@@ -1,0 +1,73 @@
+<h2>设计 §1 — 架构与显示栈</h2>
+
+<div class="section">
+  <h3>显示层叠模型</h3>
+  <div style="background:#111;padding:16px;border-radius:8px;">
+    <div style="text-align:center;padding:4px;margin:2px;background:rgba(100,149,237,0.2);border:1px solid #6495ED;border-radius:4px;color:#6495ED;">
+      LVGL UI 层（顶栏 + 底栏 + 计时器）— 前景，不透明区域遮挡相机
+    </div>
+    <div style="text-align:center;padding:4px;margin:2px;color:#888;">↓ 透明区域（预览区 640×376）↓</div>
+    <div style="text-align:center;padding:4px;margin:2px;background:rgba(100,200,100,0.15);border:1px solid #4a8;border-radius:4px;color:#4a8;">
+      VIDEO1 层 — Sensor 相机画面 — 背景
+    </div>
+  </div>
+  <ul style="margin-top:12px;color:#aaa;font-size:14px;">
+    <li>Sensor 通过 <code>Display.bind_layer(layer=VIDEO1)</code> 输出到视频层</li>
+    <li>LVGL 保持初始化，渲染 UI 到前景层</li>
+    <li>预览区 LVGL 背景设 <b>全透明</b>（bg_opa=0），让 VIDEO1 层透出</li>
+  </ul>
+</div>
+
+<div class="section">
+  <h3>ScriptRunner 改动</h3>
+  <table style="width:100%;border-collapse:collapse;color:#ccc;font-size:14px;">
+    <tr style="border-bottom:1px solid #333;"><td style="padding:6px 12px;width:160px;">_switch_mode_for('stream')</td><td style="padding:6px 12px;"><b>不再调 lv.deinit()</b>，LVGL 全程存活。仅绑定 Sensor 到 VIDEO1。</td></tr>
+    <tr style="border-bottom:1px solid #333;"><td style="padding:6px 12px;">BackBar 创建时机</td><td style="padding:6px 12px;"><b>由相机脚本自己管理</b>顶栏（非统一 BackBar），因为顶栏布局不同（居中标题）</td></tr>
+    <tr style="border-bottom:1px solid #333;"><td style="padding:6px 12px;">_switch_to_lvgl_mode()</td><td style="padding:6px 12px;">仅释放 Sensor/VIDEO1，不重建 LVGL（因为从未销毁）</td></tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>CameraApp 内部视图状态机</h3>
+  <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px;">
+    <div style="background:#1a2a1a;border:2px solid #4a4;border-radius:8px;padding:10px 14px;text-align:center;">
+      <b>PREVIEW_PHOTO</b><br/><span style="color:#888;">拍照待机</span>
+    </div>
+    <span style="color:#666;">→ 模式按钮</span>
+    <div style="background:#1a1a2a;border:2px solid #48f;border-radius:8px;padding:10px 14px;text-align:center;">
+      <b>PREVIEW_VIDEO</b><br/><span style="color:#888;">录像待机</span>
+    </div>
+    <span style="color:#666;">→ 按快门</span>
+    <div style="background:#2a1a1a;border:2px solid #c44;border-radius:8px;padding:10px 14px;text-align:center;">
+      <b>RECORDING</b><br/><span style="color:#888;">录像中</span>
+    </div>
+    <span style="color:#666;">↘ 图库按钮</span>
+    <div style="background:#1a1a1a;border:2px solid #666;border-radius:8px;padding:10px 14px;text-align:center;">
+      <b>GALLERY</b><br/><span style="color:#888;">照片浏览</span>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>图库子页面</h3>
+  <ul style="color:#aaa;font-size:14px;">
+    <li>同一 CameraApp 内的视图切换（类似 settings 的 _render_language / _render_about）</li>
+    <li>进入时扫描 <code>/data/photo/</code> 目录，按文件修改时间倒序排列</li>
+    <li>显示缩略图 + 日期标签，垂直滚动列表</li>
+    <li>点击照片可全屏查看，再次点击返回列表</li>
+    <li>顶栏与相机同布局：左返回 + 居中「图库」</li>
+  </ul>
+</div>
+
+<p class="subtitle" style="margin-top:20px;">这个架构部分对吗？</p>
+
+<div class="options">
+  <div class="option" data-choice="ok" onclick="toggleSelect(this)">
+    <div class="letter">✓</div>
+    <div class="content"><h3>架构 OK，继续</h3></div>
+  </div>
+  <div class="option" data-choice="adjust" onclick="toggleSelect(this)">
+    <div class="letter">…</div>
+    <div class="content"><h3>需要调整</h3></div>
+  </div>
+</div>

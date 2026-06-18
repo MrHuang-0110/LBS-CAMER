@@ -1,0 +1,11 @@
+{
+  "id": "settings",
+  "version": "1.0.0",
+  "name_key": "category.settings",
+  "desc_key": "category.settings_desc",
+  "entry_icon": "/sdcard/CamerAi/resource/icons/menu_icon/settings.png",
+  "models": [],
+  "ui_mode": "page",
+  "enabled": true,
+  "order": 1
+}

@@ -1,0 +1,57 @@
+<h2>三个按钮的功能确认</h2>
+<p class="subtitle">请选择每个按钮点击后的行为</p>
+
+<div class="options" data-multiselect>
+  <div class="option" data-choice="shutter-capture" onclick="toggleSelect(this)">
+    <div class="letter">📷</div>
+    <div class="content">
+      <h3>快门 — 拍摄照片存 SD 卡</h3>
+      <p>按下后捕获当前帧，保存为 JPEG/BMP 到 SD 卡。⚠️ 但 K230 在 LVGL 运行期间做文件 I/O 会死锁！</p>
+    </div>
+  </div>
+  <div class="option" data-choice="shutter-placeholder" onclick="toggleSelect(this)">
+    <div class="letter">📷</div>
+    <div class="content">
+      <h3>快门 — 仅 UI 占位（暂不实现）</h3>
+      <p>按钮先放上去，功能后续再实现。相机纯预览。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="gallery-sd" onclick="toggleSelect(this)">
+    <div class="letter">🖼</div>
+    <div class="content">
+      <h3>图库 — 浏览 SD 卡照片</h3>
+      <p>打开之前拍摄的照片列表。⚠️ 同样涉及文件 I/O 死锁风险。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="gallery-placeholder" onclick="toggleSelect(this)">
+    <div class="letter">🖼</div>
+    <div class="content">
+      <h3>图库 — 仅 UI 占位（暂不实现）</h3>
+      <p>按钮先放上去，功能后续实现。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="mode-switch" onclick="toggleSelect(this)">
+    <div class="letter">⚙</div>
+    <div class="content">
+      <h3>模式 — 切换分辨率/画幅</h3>
+      <p>例如 VGA ↔ QVGA 切换，或切换不同的 Sensor 模式。</p>
+    </div>
+  </div>
+  <div class="option" data-choice="mode-placeholder" onclick="toggleSelect(this)">
+    <div class="letter">⚙</div>
+    <div class="content">
+      <h3>模式 — 仅 UI 占位（暂不实现）</h3>
+      <p>按钮先放上去，功能后续实现。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section" style="margin-top: 24px; padding: 16px; background: #2a1a1a; border-radius: 8px; border-left: 3px solid #cc4444;">
+  <h3 style="color: #cc6666;">⚠️ K230 硬约束提醒</h3>
+  <p style="color: #cc8888; font-size: 14px;">
+    K230 上 <b>LVGL 运行期间禁止 SD 卡文件读写</b>（open/read/write）。<br/>
+    LVGL 的显示 flush 和 SD/FATFS 驱动共享 DMA 资源，同时使用会永久死锁（黑屏+无日志）。<br/>
+    因此「拍照存 SD」「浏览图库」等功能在当前架构下<b>无法在相机预览期间实现</b>——<br/>
+    需要退出相机模式（关闭 LVGL → 做文件 I/O → 重新打开相机），或者采用其他方案。
+  </p>
+</div>

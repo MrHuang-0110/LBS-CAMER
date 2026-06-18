@@ -1,0 +1,68 @@
+{
+  "category": {
+    "settings": "设置",
+    "settings_desc": "语言、系统关于",
+    "camera": "相机",
+    "camera_desc": "实时预览拍摄",
+    "face_detect": "人脸识别",
+    "face_detect_desc": "人脸检测与识别",
+    "tag_detect": "标签识别",
+    "tag_detect_desc": "二维码与标签码",
+    "object_detect": "物体识别",
+    "object_detect_desc": "检测画面中的物体",
+    "color_detect": "颜色识别",
+    "color_detect_desc": "识别色块与主色",
+    "road_detect": "道路识别",
+    "road_detect_desc": "车道线与循线",
+    "gesture_detect": "手势识别",
+    "gesture_detect_desc": "识别手部手势",
+    "body_detect": "人体识别",
+    "body_detect_desc": "人体检测与姿态",
+    "object_classify": "物体分类",
+    "object_classify_desc": "对物体进行分类",
+    "image_classify": "图像分类",
+    "image_classify_desc": "对图像场景分类"
+  },
+  "settings": {
+    "tab_language": "语言",
+    "tab_language_desc": "切换界面显示语言",
+    "tab_about": "关于",
+    "tab_about_desc": "系统版本与设备信息",
+    "lang_zh": "中文",
+    "lang_en": "English",
+    "lang_current": "当前",
+    "about_app_name": "应用名称",
+    "about_version": "版本",
+    "about_platform": "平台",
+    "about_display": "显示",
+    "about_sdk": "固件",
+    "about_author": "作者",
+    "about_app_name_val": "CamerAi",
+    "about_version_val": "v0.1.0",
+    "about_platform_val": "K230D BOX",
+    "about_display_val": "ST7701 640x480",
+    "about_sdk_val": "MicroPython+LVGL",
+    "about_author_val": "LBS Team"
+  },
+  "camera": {
+    "gallery": "图库",
+    "photo_mode": "拍照",
+    "video_mode": "录像",
+    "recording": "录制中",
+    "no_photos": "暂无照片",
+    "save_failed": "保存失败"
+  },
+  "face_detect": {
+    "save": "保存",
+    "clear": "清除",
+    "save_success": "保存成功",
+    "registered": "已注册",
+    "press_k2": "按K2注册人脸",
+    "back_fb": "<",
+    "list_fb": "="
+  },
+  "common": {
+    "back": "返回",
+    "app_name": "CamerAi"
+  }
+}

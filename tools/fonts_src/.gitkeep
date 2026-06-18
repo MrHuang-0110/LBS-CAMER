@@ -1,0 +1,5 @@
+# 将思源黑体 Regular OTF 放到此目录
+# 下载地址：
+# https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf
+#
+# 或使用任意 TTF/OTF 中文字体，然后修改 build_fonts.py 中的 FONT_SRC 路径。

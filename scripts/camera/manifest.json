@@ -1,0 +1,13 @@
+{
+  "id": "camera",
+  "version": "1.0.0",
+  "name_key": "category.camera",
+  "desc_key": "category.camera_desc",
+  "entry_icon": "/sdcard/CamerAi/resource/icons/menu_icon/camera.png",
+  "icon_dir": "/sdcard/CamerAi/resource/icons/camera_icon/",
+  "models": [],
+  "demo_ref": "demo/基础实验例程/实验12 摄像头实验/main.py",
+  "ui_mode": "stream",
+  "enabled": true,
+  "order": 2
+}

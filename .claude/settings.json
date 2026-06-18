@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "powershell",
+            "command": "$json = [Console]::In.ReadToEnd() | ConvertFrom-Json; $path = $json.tool_input.file_path; if (-not $path) { $path = $json.tool_input.notebook_path }; $project = (Resolve-Path '.').Path; $progress = Join-Path $project '项目进度.md'; if ($path -and ((Resolve-Path -LiteralPath $path -ErrorAction SilentlyContinue).Path -ne $progress)) { $msg = '提醒：本次已修改 ' + $path + '。请同步检查并更新 项目进度.md，记录时间、文件、变更内容、验证结果和下一步。'; @{ hookSpecificOutput = @{ hookEventName = 'PostToolUse'; additionalContext = $msg } } | ConvertTo-Json -Compress }",
+            "timeout": 10,
+            "statusMessage": "提醒更新项目进度"
+          }
+        ]
+      }
+    ]
+  }
+}

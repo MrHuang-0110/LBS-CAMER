@@ -1,0 +1,30 @@
+# ===== Python 缓存 / Python cache =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ===== 二进制归档 / Binary archives =====
+*.zip
+*.tar
+*.gz
+*.7z
+*.rar
+
+# ===== 备份 / Backup =====
+*.backup
+backup/
+backup_*/
+*_backup*/
+
+# ===== IDE / 编辑器 / Editor =====
+.vscode/
+.idea/
+*.swp
+
+# ===== 系统 / OS =====
+Thumbs.db
+.DS_Store
+
+# ===== 误建目录 / Typo dirs =====
+reousrce/

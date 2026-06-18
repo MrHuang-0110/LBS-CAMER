@@ -1,0 +1,115 @@
+{
+  "version": "1.4",
+  "categories": [
+    {
+      "id": "settings",
+      "script": "settings",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/setting.png",
+      "name_key": "category.settings",
+      "desc_key": "category.settings_desc",
+      "ui_mode": "page",
+      "enabled": true,
+      "order": 1
+    },
+    {
+      "id": "camera",
+      "script": "camera",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/camera.png",
+      "name_key": "category.camera",
+      "desc_key": "category.camera_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 2
+    },
+    {
+      "id": "face_detect",
+      "script": "face_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/face_detect.png",
+      "name_key": "category.face_detect",
+      "desc_key": "category.face_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 3
+    },
+    {
+      "id": "tag_detect",
+      "script": "tag_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/tag_detect.png",
+      "name_key": "category.tag_detect",
+      "desc_key": "category.tag_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 4
+    },
+    {
+      "id": "object_detect",
+      "script": "object_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/object_detect.png",
+      "name_key": "category.object_detect",
+      "desc_key": "category.object_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 5
+    },
+    {
+      "id": "color_detect",
+      "script": "color_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/color_detect.png",
+      "name_key": "category.color_detect",
+      "desc_key": "category.color_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 6
+    },
+    {
+      "id": "road_detect",
+      "script": "road_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/road_detect.png",
+      "name_key": "category.road_detect",
+      "desc_key": "category.road_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 7
+    },
+    {
+      "id": "gesture_detect",
+      "script": "gesture_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/gesture_detect.png",
+      "name_key": "category.gesture_detect",
+      "desc_key": "category.gesture_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 8
+    },
+    {
+      "id": "body_detect",
+      "script": "body_detect",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/body_detect.png",
+      "name_key": "category.body_detect",
+      "desc_key": "category.body_detect_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 9
+    },
+    {
+      "id": "object_classify",
+      "script": "object_classify",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/object_classify.png",
+      "name_key": "category.object_classify",
+      "desc_key": "category.object_classify_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 10
+    },
+    {
+      "id": "image_classify",
+      "script": "image_classify",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/image_classify.png",
+      "name_key": "category.image_classify",
+      "desc_key": "category.image_classify_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 11
+    }
+  ]
+}

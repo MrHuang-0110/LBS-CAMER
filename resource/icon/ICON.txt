@@ -1,0 +1,37 @@
+/resource/icons/ — icon resources root.
+
+Each script owns one icon directory: /resource/icons/<script_id>_icon/.
+All icons used by that script should be placed in its own directory.
+
+Main menu entry icons are managed by the main menu resource directory:
+  /resource/icons/menu_icon/
+
+Main menu card: left icon + center function name ONLY (no description).
+
+Menu entry icons registered in config/categories.json:
+  menu_icon/settings.png
+  menu_icon/camera.png
+  menu_icon/face_detect.png
+  menu_icon/tag_detect.png
+  menu_icon/object_detect.png
+  menu_icon/color_detect.png
+  menu_icon/road_detect.png
+  menu_icon/gesture_detect.png
+  menu_icon/body_detect.png
+  menu_icon/object_classify.png
+  menu_icon/image_classify.png
+
+Script internal icon directories:
+  settings_icon/
+  camera_icon/
+  face_detect_icon/
+  tag_detect_icon/
+  object_detect_icon/
+  color_detect_icon/
+  road_detect_icon/
+  gesture_detect_icon/
+  body_detect_icon/
+  object_classify_icon/
+  image_classify_icon/
+
+Boot LOGO is separate: /resource/logo.png

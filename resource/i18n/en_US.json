@@ -1,0 +1,68 @@
+{
+  "category": {
+    "settings": "Settings",
+    "settings_desc": "Language & About",
+    "camera": "Camera",
+    "camera_desc": "Live preview",
+    "face_detect": "Face",
+    "face_detect_desc": "Face detection",
+    "tag_detect": "Tag",
+    "tag_detect_desc": "QR & tag codes",
+    "object_detect": "Object",
+    "object_detect_desc": "Detect objects",
+    "color_detect": "Color",
+    "color_detect_desc": "Color detection",
+    "road_detect": "Road",
+    "road_detect_desc": "Lane & line follow",
+    "gesture_detect": "Gesture",
+    "gesture_detect_desc": "Hand gesture",
+    "body_detect": "Body",
+    "body_detect_desc": "Body detection",
+    "object_classify": "Obj Classify",
+    "object_classify_desc": "Object classification",
+    "image_classify": "Img Classify",
+    "image_classify_desc": "Image classification"
+  },
+  "settings": {
+    "tab_language": "Language",
+    "tab_language_desc": "Switch UI language",
+    "tab_about": "About",
+    "tab_about_desc": "Version & device info",
+    "lang_zh": "中文",
+    "lang_en": "English",
+    "lang_current": "Current",
+    "about_app_name": "App Name",
+    "about_version": "Version",
+    "about_platform": "Platform",
+    "about_display": "Display",
+    "about_sdk": "Firmware",
+    "about_author": "Author",
+    "about_app_name_val": "CamerAi",
+    "about_version_val": "v0.1.0",
+    "about_platform_val": "K230D BOX",
+    "about_display_val": "ST7701 640x480",
+    "about_sdk_val": "MicroPython+LVGL",
+    "about_author_val": "LBS Team"
+  },
+  "camera": {
+    "gallery": "Gallery",
+    "photo_mode": "Photo",
+    "video_mode": "Video",
+    "recording": "Recording",
+    "no_photos": "No photos",
+    "save_failed": "Save failed"
+  },
+  "face_detect": {
+    "save": "Save",
+    "clear": "Clear",
+    "save_success": "Saved",
+    "registered": "Registered",
+    "press_k2": "Press K2 to register",
+    "back_fb": "<",
+    "list_fb": "="
+  },
+  "common": {
+    "back": "Back",
+    "app_name": "CamerAi"
+  }
+}
