@@ -103,7 +103,15 @@ def run_script(category_id):
     print("[CamerAi] run_script start: %s" % category_id)
     fpioa = FPIOA()
     runtime = AppRuntime()
-    runtime.init_app(category_id, fpioa)
+    # face_detect 走裸跑基线：run() 自带 media_init/lvgl_init（已板端验证稳定），
+    # 不能再调 runtime.init_app（否则 Display/Sensor/MediaManager 双重 init →
+    # OSError: sensor(2) is already inited）。但仍需 runtime.fpioa 供 IdRegistry
+    # 配置 K2(GPIO0)；buzzer=None，id_registry 静默守卫。buzzer 接回留作单独实验。
+    # 其他脚本（迁移后）走完整 runtime.init_app。
+    if category_id == "face_detect":
+        runtime.fpioa = fpioa
+    else:
+        runtime.init_app(category_id, fpioa)
     print("[CamerAi] loading script module...")
     mod = _load_script(category_id)
     print("[CamerAi] script module=%s has_run=%s" % (mod is not None,

@@ -206,15 +206,28 @@ def test_face_detect_ai_thread_calls_try_register():
 
 # ── 收尾临时定位测试 ──
 
-def test_main_no_face_detect_init_app_skip():
-    """main.py must NOT have the face_detect init_app skip branch anymore."""
+def test_main_face_detect_skips_init_app_sets_fpioa():
+    """face_detect self-inits media/lvgl (proven stable bare-metal baseline).
+
+    main.py must NOT call full runtime.init_app for face_detect — init_app
+    inits Display/Sensor/MediaManager, which face_detect.run()'s media_init()
+    also inits → double-init → OSError: sensor(2) is already inited.
+
+    But main.py MUST set runtime.fpioa for face_detect so IdRegistry can
+    configure K2 (GPIO0). buzzer stays None; id_registry guards silently.
+    Other categories still go through runtime.init_app (when migrated).
+    """
     src = open(MAIN_PATH, encoding="utf-8").read()
-    # Old: if category_id != "face_detect": runtime.init_app(...)  ← must be gone
-    # New: runtime.init_app(category_id, fpioa)  ← unconditional
-    assert 'category_id != "face_detect"' not in src, \
-        "main.py must not have face_detect init_app exclusion"
+    # face_detect must be special-cased (skip full init_app)
+    assert ('category_id == "face_detect"' in src
+            or 'category_id != "face_detect"' in src), \
+        "main.py must special-case face_detect (skip full init_app to avoid double-init)"
+    # face_detect path must expose fpioa (IdRegistry K2 config needs it)
+    assert "runtime.fpioa = fpioa" in src, \
+        "face_detect path must set runtime.fpioa for IdRegistry K2 (GPIO0) config"
+    # non-face_detect still uses init_app (forward-looking for migrated scripts)
     assert "runtime.init_app(category_id, fpioa)" in src, \
-        "main.py must call runtime.init_app for all categories"
+        "non-face_detect scripts must still call runtime.init_app"
 
 
 def test_app_runtime_init_app_no_face_detect_skip():
