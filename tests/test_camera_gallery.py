@@ -37,17 +37,28 @@ def test_gallery_has_delete_reflow_helpers():
     assert "_rebuild_gallery_ui" in funcs, "delete must rebuild gallery UI so lower rows move up"
 
 
-def test_delete_handler_uses_reflow_helpers():
-    """_on_delete_photo 必须调 _remove_photo_from_groups + _rebuild_gallery_ui。"""
+def test_delete_handler_enqueues_and_beeps():
+    """_on_delete_photo(CLICKED 回调)只入队 + 蜂鸣,不删文件/不重建 UI。
+
+    reflow(os.remove + _remove_photo_from_groups + _rebuild_gallery_ui)由
+    _process_pending_deletes 在主循环执行(见 test_process_pending_deletes_*)。
+    根因:回调内删 _gallery_list(被删按钮祖先)= use-after-free 死机。
+    """
     tree = _parse(APP_PATH)
     delete_fn = _function_node(tree, "_on_delete_photo")
 
     called = set()
     for node in ast.walk(delete_fn):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            called.add(node.func.id)
-    assert "_remove_photo_from_groups" in called, "delete must update grouped photo data"
-    assert "_rebuild_gallery_ui" in called, "delete must rebuild list positions after data changes"
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                called.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                called.add(node.func.attr)
+    assert "append" in called, "_on_delete_photo must enqueue photo (deferred)"
+    assert "beep" in called, "_on_delete_photo must beep feedback"
+    assert "remove" not in called, "_on_delete_photo must NOT os.remove (deferred)"
+    assert "_rebuild_gallery_ui" not in called, \
+        "_on_delete_photo must NOT rebuild UI (deferred)"
 
 
 def test_photo_capture_saves_as_jpg():
@@ -89,6 +100,68 @@ def test_camera_does_not_import_image():
             assert node.module != "image" and (
                 node.module is None or not node.module.startswith("image")), \
                 "must not import from image"
+
+
+def _called_names(fn_node):
+    """收集函数体内调用的函数名(Name 调用 + Attribute 属性调用)。"""
+    names = set()
+    for node in ast.walk(fn_node):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+    return names
+
+
+def test_delete_deferred_out_of_callback():
+    """_on_delete_photo 不得在事件回调内直接删文件/重建 UI。
+
+    根因:删除按钮(del_btn)是 _gallery_list 的子孙。在 CLICKED 回调内调
+    _rebuild_gallery_ui() 会删除 _gallery_list(事件派发控件的祖先)→ LVGL
+    use-after-free → 板端死机重启(C 级故障,不可被 try/except 捕获)。
+    必须入队,由主循环 _process_pending_deletes 处理(对齐白闪 deferred 模式)。
+    """
+    tree = _parse(APP_PATH)
+    fn = _function_node(tree, "_on_delete_photo")
+    called = _called_names(fn)
+    assert "remove" not in called, \
+        "_on_delete_photo must NOT call os.remove directly (defer to main loop)"
+    assert "_rebuild_gallery_ui" not in called, \
+        "_on_delete_photo must NOT call _rebuild_gallery_ui directly (defer to main loop)"
+    assert "_remove_photo_from_groups" not in called, \
+        "_on_delete_photo must NOT call _remove_photo_from_groups directly (defer to main loop)"
+
+
+def test_delete_has_pending_queue_and_processor():
+    """必须有 _pending_deletes 队列 + _process_pending_deletes 处理器。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "_pending_deletes" in src, "must have _pending_deletes queue"
+    tree = _parse(APP_PATH)
+    funcs = _module_functions(tree)
+    assert "_process_pending_deletes" in funcs, \
+        "must have _process_pending_deletes processor (deferred delete handler)"
+
+
+def test_process_pending_deletes_does_remove_and_rebuild():
+    """_process_pending_deletes 必须 os.remove + _remove_photo_from_groups + _rebuild_gallery_ui。"""
+    tree = _parse(APP_PATH)
+    fn = _function_node(tree, "_process_pending_deletes")
+    called = _called_names(fn)
+    assert "remove" in called, "_process_pending_deletes must call os.remove"
+    assert "_remove_photo_from_groups" in called, \
+        "_process_pending_deletes must call _remove_photo_from_groups"
+    assert "_rebuild_gallery_ui" in called, \
+        "_process_pending_deletes must call _rebuild_gallery_ui"
+
+
+def test_run_loop_processes_pending_deletes():
+    """run() 主循环必须调 _process_pending_deletes(处理从事件回调 deferred 的删除)。"""
+    tree = _parse(APP_PATH)
+    run_fn = _function_node(tree, "run")
+    called = _called_names(run_fn)
+    assert "_process_pending_deletes" in called, \
+        "run() main loop must call _process_pending_deletes"
 
 
 def test_runner():

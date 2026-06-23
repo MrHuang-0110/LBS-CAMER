@@ -80,6 +80,13 @@ _gallery_list = None
 _gallery_objects = []
 _gallery_groups = []
 
+# 待删除照片队列 — 删除按钮 CLICKED 回调只入队 + 蜂鸣,
+# 实际 os.remove + _rebuild_gallery_ui 由主循环 _process_pending_deletes 执行
+# (K230 无 lv.timer,对齐白闪 deferred 模式)。根因:删除按钮是 _gallery_list
+# 的子孙,在回调内删 list(事件派发控件祖先)= LVGL use-after-free → 板端
+# 死机重启(C 级故障,不可被 try/except 捕获)。
+_pending_deletes = []
+
 
 def _ctx_runtime():
     """返回当前 run() 的 runtime(入口缓存到模块级)。
@@ -146,6 +153,9 @@ def run(runtime):
             _update_timer()
         # 拍照白闪清理(120ms 后删)
         _update_flash()
+        # 处理 deferred 删除(从图库删除按钮回调入队;回调内直接删 list 会
+        # use-after-free 死机,故 deferred 到主循环执行)
+        _process_pending_deletes()
         time.sleep_ms(lv.task_handler())
     _destroy_ui()
 
@@ -812,23 +822,39 @@ def _rebuild_gallery_ui():
 
 
 def _on_delete_photo(photo, row_obj):
-    """删除照片文件 + 移除 UI 行。"""
-    path = photo['path']
-    print("[Gallery] delete: %s" % path)
+    """删除按钮 CLICKED 回调 — 只入队 + 蜂鸣,不删文件/不重建 UI。
 
-    # 1. 删除文件
-    try:
-        os.remove(path)
-    except Exception as e:
-        print("[Gallery] remove failed: %s" % e)
-        return  # 删除失败,保留 UI
-
-    # 2. 从分组数据移除,重建列表让下方照片上移
-    _remove_photo_from_groups(_gallery_groups, photo)
-    _rebuild_gallery_ui()
-
-    # 3. 蜂鸣反馈
+    实际删除由主循环 _process_pending_deletes 执行。根因:删除按钮(del_btn)
+    是 _gallery_list 的子孙,在回调内调 _rebuild_gallery_ui() 会删除 _gallery_list
+    (事件派发控件的祖先)→ LVGL use-after-free → 板端死机重启(C 级故障)。
+    对齐白闪 deferred 模式(K230 无 lv.timer,统一走主循环帧驱动)。
+    """
+    _pending_deletes.append(photo)
     _ctx_runtime().buzzer.beep(ms=20)
+
+
+def _process_pending_deletes():
+    """主循环每帧调:处理从删除按钮回调 deferred 的照片删除。
+
+    此处已离开 CLICKED 事件回调,删除 _gallery_list(被删按钮的祖先)安全,
+    不会 use-after-free。
+    """
+    if not _pending_deletes:
+        return
+    while _pending_deletes:
+        photo = _pending_deletes.pop(0)
+        path = photo['path']
+        print("[Gallery] delete: %s" % path)
+        # 1. 删除文件
+        try:
+            os.remove(path)
+        except Exception as e:
+            print("[Gallery] remove failed: %s" % e)
+            continue  # 删除失败,跳过重建该照片
+        # 2. 从分组数据移除,重建列表让下方照片上移
+        _remove_photo_from_groups(_gallery_groups, photo)
+    # 批量删完后重建一次 UI(避免每删一张重建一次)
+    _rebuild_gallery_ui()
 
 
 def _leave_gallery():
@@ -850,6 +876,7 @@ def _leave_gallery():
         _gallery_list = None
 
     _gallery_groups = []
+    _pending_deletes.clear()  # 离开图库,丢弃未处理的删除请求(对象即将销毁)
 
     # 恢复相机 UI:屏幕透明(相机预览需 bg_opa=0 透出 OSD1)
     if _screen is not None:
@@ -881,6 +908,7 @@ def _destroy_ui():
     # 释放图库对象
     _gallery_objects[:] = []
     _gallery_groups = []
+    _pending_deletes.clear()  # 退出 APP,丢弃未处理的删除请求
 
     for obj in (_top_bar, _bottom_bar, _preview_bg, _timer_label, _gallery_list):
         if obj is not None:
