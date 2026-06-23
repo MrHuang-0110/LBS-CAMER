@@ -83,6 +83,39 @@ def test_init_app_preloads_back_icon():
         "init_app must call icon_cache.preload_back_icon() for top bar back button"
 
 
+def test_init_app_preloads_camera_icons():
+    """init_app 必须为 camera 预读 camera 图标。
+
+    根因:camera 走 init_app,顶栏返回/底栏图库/模式钮用 get_camera_icon(),
+    而 preload_camera_icons() 原本只在 init_menu 调 → camera 进程拿不到图标。
+    """
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    init_start = src.find("def init_app(")
+    assert init_start != -1, "init_app missing"
+    init_body = src[init_start:]
+    assert "preload_camera_icons" in init_body, \
+        "init_app must preload camera icons for camera top/bottom bar"
+
+
+def test_init_app_uses_full_render_mode():
+    """init_app 必须用 FULL 渲染模式,不得用 PARTIAL。
+
+    根因:flush_cb 每次清零非活跃缓冲,只在 FULL(整屏重绘)下安全;PARTIAL 只
+    刷脏区,清零会抹掉持久 UI(顶栏等)——见 hw/lcd.py 注释。camera 拍照闪光
+    触发脏区后 PARTIAL+清零导致顶底栏消失;face_detect 每帧画框同理会崩。
+    单线程下 FULL 无 OSD1/OSD2 DMA 竞争,稳。对齐官方 ai_lvgl.py + hw/lcd.py。
+    """
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    assert "DISP_RENDER_MODE.PARTIAL" not in src, \
+        "must not use PARTIAL (clears inactive buffer, wipes persistent UI on dynamic redraw)"
+    init_start = src.find("def init_app(")
+    assert init_start != -1, "init_app missing"
+    init_body = src[init_start:]
+    assert "_lvgl_init" in init_body, "init_app must call _lvgl_init"
+    assert "DISP_RENDER_MODE.FULL" in init_body, \
+        "init_app must pass FULL render mode to _lvgl_init"
+
+
 if __name__ == "__main__":
     failures = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

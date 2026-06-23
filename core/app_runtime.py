@@ -143,28 +143,26 @@ class AppRuntime:
         # 3. MediaManager.init（sensor 配置后）
         MediaManager.init()
         self._init_backlight(fpioa)
-        # render mode 按 ui_mode：stream 用 PARTIAL（顶底栏静态+预览透明，只刷脏区，
-        # 避开 FULL 整屏 DMA 与 OSD1 推帧竞争）；menu/page 用 FULL（全屏重绘）。
-        # PARTIAL 板端若 flush_cb 异常，退路：此处改回 FULL（单线程下仍稳）。
-        from core.config_manager import ConfigManager as _CM
-        _cm = _CM()
-        _cm.load()
-        _cat = _cm.get_category(category_id)
-        _ui_mode = _cat.get("ui_mode", "") if _cat else ""
-        _render_mode = (lv.DISP_RENDER_MODE.PARTIAL
-                        if _ui_mode == "stream"
-                        else lv.DISP_RENDER_MODE.FULL)
+        # render mode 统一 FULL：flush_cb 每次清零非活跃缓冲，只在 FULL(整屏重绘)
+        # 下安全；PARTIAL 只刷脏区，清零会抹掉持久 UI(顶栏等)——见 hw/lcd.py 注释。
+        # camera 拍照闪光触发脏区后 PARTIAL+清零导致顶底栏消失；face_detect 每帧
+        # 画框同理会崩。单线程主循环下 FULL 无 OSD1/OSD2 DMA 竞争(模板 FULL 已
+        # 板端验证稳定)，故 stream/page 统一 FULL。对齐官方 ai_lvgl.py + hw/lcd.py。
         lv.init()
-        self._lvgl_init(_render_mode)
+        self._lvgl_init(lv.DISP_RENDER_MODE.FULL)
         self._init_touch()
         from core.font_manager import fonts
         try:
             fonts.load_all()
         except Exception as e:
             print("[Runtime] font load warning: %s" % e)
-        # 预读顶栏返回钮图标（脚本顶栏 BackBar 用，task_handler 前完成文件 I/O）
+        # 预读脚本图标（task_handler 前完成文件 I/O，坑#2）：
+        #   back 图标 — 所有脚本顶栏返回钮共用
+        #   camera 图标 — camera 顶栏返回/底栏图库·模式钮用（仅 camera 需要）
         from core.icon_cache import icon_cache
         icon_cache.preload_back_icon()
+        if category_id == "camera":
+            icon_cache.preload_camera_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
