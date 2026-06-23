@@ -37,6 +37,60 @@ def test_settings_run_uses_exit_flag_loop():
     assert "task_handler" in src, "run must call lv.task_handler()"
 
 
+def test_settings_no_basescript():
+    """改造后不得残留旧 BaseScript 架构。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    for token in ("BaseScript", "on_enter", "on_exit", "SCRIPT_ID",
+                  "SELF_MANAGED_TOP_BAR", "class SettingsApp"):
+        assert token not in src, "old architecture token must be removed: %s" % token
+
+
+def test_settings_uses_runtime_not_ctx():
+    """ctx.X 必须改为 runtime.X（不留 ctx 引用）。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "runtime.lang" in src, "must use runtime.lang"
+    assert "runtime.config" in src, "must use runtime.config"
+    # 不应再有 self.ctx 或裸 ctx.lang/ctx.config（注释里的 ctx 不算：用行内检查）
+    for line in src.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            continue
+        assert "self.ctx" not in line, "self.ctx must be removed: %s" % line
+        assert "ctx.lang" not in line and "ctx.config" not in line, \
+            "ctx.lang/ctx.config must be runtime.* : %s" % line
+
+
+def test_settings_has_top_bar_back_button():
+    """必须有顶栏返回钮（CLICKED 设 exit_flag）。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "_build_top_bar" in src, "must have _build_top_bar"
+    assert "EVENT.CLICKED" in src, "back button must bind CLICKED"
+    assert "exit_flag[0] = True" in src, "back callback must set exit_flag"
+
+
+def test_settings_title_from_lang():
+    """顶栏标题必须取 lang（非硬编码）。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "category.settings" in src, "title must come from lang.t('category.settings')"
+
+
+def test_settings_does_not_self_init_media():
+    """走 init_app，不自 init media/sensor。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "MediaManager.init" not in src, "must not self-init MediaManager"
+    assert "sensor.reset" not in src, "must not self-reset sensor"
+
+
+def test_settings_keeps_language_and_about_business():
+    """语言切换 + 关于业务必须保留。"""
+    src = open(APP_PATH, encoding="utf-8").read()
+    assert "_set_lang" in src, "language switch function must remain"
+    assert ".switch(" in src, "lang.switch must remain"
+    assert ".save()" in src, "config.save must remain"
+    assert "event_bus.emit" in src, "event_bus.emit must remain"
+    assert "_render_about" in src, "about render must remain"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
