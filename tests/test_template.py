@@ -161,6 +161,58 @@ def test_template_on_frame_isolated_by_try_except():
     assert "except" in src, "on_frame call must be in try/except"
 
 
+def test_template_build_ui_creates_top_and_bottom_bar():
+    """_build_ui 必须创建顶栏+底栏+预览区，返回钮挂 CLICKED 回调。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "def _build_ui(" in src, "_build_ui missing"
+    assert "_top_bar" in src, "must create _top_bar"
+    assert "_bottom_bar" in src, "must create _bottom_bar"
+    assert "_preview" in src, "must create _preview"
+    # 返回钮回调
+    assert "EVENT.CLICKED" in src, "back button must bind CLICKED"
+    assert "exit_flag[0] = True" in src, "back callback must set exit_flag"
+
+
+def test_template_destroy_ui_restores_screen_opacity():
+    """_destroy_ui 必须删 UI 对象 + 恢复屏幕 bg_opa=255，且不调 runtime.cleanup()。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "def _destroy_ui(" in src, "_destroy_ui missing"
+    assert "bg_opa(255" in src or "bg_opa(255, 0)" in src, \
+        "_destroy_ui must restore screen opacity to 255 for menu"
+    # 必须不在 _destroy_ui 函数体内【调用】runtime.cleanup（职责交给 main.py）。
+    # 用 AST 检查真正的调用节点，避免误中 docstring/注释里的 "runtime.cleanup" 字样。
+    tree = _parse(TEMPLATE_APP_PATH)
+    destroy_fn = None
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_destroy_ui":
+            destroy_fn = n
+            break
+    assert destroy_fn is not None, "_destroy_ui function missing"
+    for node in ast.walk(destroy_fn):
+        if isinstance(node, ast.Call):
+            func = node.func
+            # 形如 runtime.cleanup() → Attribute(attr='cleanup', value=Name(id='runtime'))
+            if (isinstance(func, ast.Attribute) and func.attr == "cleanup"
+                    and isinstance(func.value, ast.Name) and func.value.id == "runtime"):
+                raise AssertionError(
+                    "_destroy_ui must NOT call runtime.cleanup() (main.py's job)")
+
+
+def test_template_uses_runtime_sensor_not_self_init():
+    """模板必须用 runtime.sensor（init_app 已配），不自己 media_init。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "runtime.sensor.snapshot" in src, "must use runtime.sensor.snapshot"
+    # 不应自己 init sensor/media（init_app 已做）
+    assert "MediaManager.init" not in src, "must not self-init MediaManager"
+    assert "sensor.reset()" not in src, "must not self-reset sensor"
+
+
+def test_template_title_hardcoded():
+    """标题硬编码中性文字（不依赖 manifest/lang，隔离变量）。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "基础框架" in src, "title must be hardcoded neutral text"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
