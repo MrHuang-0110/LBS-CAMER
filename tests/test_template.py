@@ -83,6 +83,22 @@ def test_main_run_script_calls_cleanup_skipping_face_detect():
         "cleanup must be skipped for face_detect"
 
 
+def test_template_manifest_exists():
+    """scripts/_template/manifest.json must exist with id=_template, ui_mode=stream."""
+    import json
+    with open(TEMPLATE_MANIFEST_PATH, encoding="utf-8") as f:
+        m = json.load(f)
+    assert m.get("id") == "_template", "manifest id must be _template"
+    assert m.get("ui_mode") == "stream", "manifest ui_mode must be stream"
+    assert m.get("enabled", True) is True, "manifest must be enabled"
+
+
+def test_template_package_init_exists():
+    """scripts/_template/__init__.py must exist (package marker)."""
+    init_path = os.path.join(ROOT, "scripts", "_template", "__init__.py")
+    assert os.path.exists(init_path), "_template package __init__.py missing"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
