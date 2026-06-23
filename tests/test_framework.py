@@ -116,6 +116,35 @@ def test_init_app_uses_full_render_mode():
         "init_app must pass FULL render mode to _lvgl_init"
 
 
+
+def test_main_does_not_special_case_face_detect_init():
+    """face_detect Phase 1 uses normal runtime.init_app path, not naked self-init."""
+    src = open(MAIN_PATH, encoding="utf-8").read()
+    assert 'category_id == "face_detect"' not in src and "category_id == 'face_detect'" not in src, \
+        "main.py must not skip init_app for face_detect"
+    assert "runtime.init_app(category_id, fpioa)" in src, \
+        "run_script must initialize scripts through runtime.init_app(category_id, fpioa)"
+
+
+def test_main_cleanup_does_not_skip_face_detect():
+    src = open(MAIN_PATH, encoding="utf-8").read()
+    assert 'category_id != "face_detect"' not in src and "category_id != 'face_detect'" not in src, \
+        "runtime.cleanup() must not skip face_detect after template migration"
+    assert "runtime.cleanup()" in src, "run_script must call runtime.cleanup()"
+
+
+def test_app_runtime_face_detect_uses_only_chn0_and_chn2():
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    start = src.find("def _channels_for")
+    assert start != -1, "_channels_for missing"
+    body = src[start:]
+    face_pos = body.find('category_id == "face_detect"')
+    assert face_pos != -1, "_channels_for must special-case face_detect channel setup"
+    face_block = body[face_pos:body.find("elif", face_pos) if body.find("elif", face_pos) != -1 else len(body)]
+    assert "CAM_CHN_ID_2" in face_block, "face_detect must declare chn2 before MediaManager.init"
+    assert "CAM_CHN_ID_1" not in face_block, "Phase 1 face_detect must not allocate unused chn1"
+
+
 if __name__ == "__main__":
     failures = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):
