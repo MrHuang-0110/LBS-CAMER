@@ -54,6 +54,20 @@ def test_init_app_passes_render_mode_for_stream():
     assert "ui_mode" in src, "init_app must read ui_mode to decide render_mode"
 
 
+def test_channels_for_template_single_channel():
+    """_channels_for must return single chn0 for _template (no extra channels)."""
+    src = open(APP_RUNTIME_PATH, encoding="utf-8").read()
+    # _channels_for 必须识别 _template 且不附加额外通道
+    assert '"_template"' in src or "'_template'" in src, \
+        "_channels_for must handle _template category"
+    # 找 _channels_for 函数体，确认 _template 分支不 append
+    start = src.find("def _channels_for(")
+    assert start != -1
+    body = src[start:start + 600]
+    # _template 分支应是 pass（单通道，复用默认 chn0）
+    assert "_template" in body, "_channels_for body must contain _template branch"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())

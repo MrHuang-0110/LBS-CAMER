@@ -174,6 +174,8 @@ class AppRuntime:
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "camera":
             chs.append((CAM_CHN_ID_1, Sensor.SXGAM, Sensor.RGB565))
+        elif category_id == "_template":
+            pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs
 
     def _init_services(self, fpioa):
