@@ -145,6 +145,26 @@ def test_app_runtime_face_detect_uses_only_chn0_and_chn2():
     assert "CAM_CHN_ID_1" not in face_block, "Phase 1 face_detect must not allocate unused chn1"
 
 
+def test_core_init_has_no_legacy_side_effect_imports():
+    """import core.app_runtime must not load old ScriptRunner/UI modules.
+
+    根因:Python import core.app_runtime 会先执行 core/__init__.py。旧 __init__
+    eager-import ScriptRunner/PluginLoader 等旧同进程架构模块,板端因此继续导入
+    ui.back_bar 并 fatal。reset 架构包初始化必须无副作用。
+    """
+    core_init_path = os.path.join(ROOT, "core", "__init__.py")
+    src = open(core_init_path, encoding="utf-8").read()
+    forbidden = [
+        "ScriptRunner",
+        "PluginLoader",
+        "core.script_runner",
+        "core.plugin_loader",
+        "ui.back_bar",
+    ]
+    found = [token for token in forbidden if token in src]
+    assert not found, "core/__init__.py must not eager-import legacy modules: %s" % found
+
+
 if __name__ == "__main__":
     failures = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

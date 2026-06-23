@@ -1,10 +1,5 @@
-# core/ — 应用框架层
-# 状态机、配置、多语言、事件总线、脚本调度、字体管理
-
-from core.app import AppState, app_state
-from core.config_manager import ConfigManager
-from core.lang import LangManager
-from core.event_bus import EventBus
-from core.font_manager import FontManager
-from core.plugin_loader import PluginLoader
-from core.script_runner import ScriptRunner
+# core/ — reset 架构公共模块包
+#
+# 保持包初始化无副作用：`import core.app_runtime` 会先执行本文件。
+# 这里不能 eager-import 旧同进程架构模块，否则会拉起已废弃的 UI
+# 依赖并在板端启动阶段 fatal。
