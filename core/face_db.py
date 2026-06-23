@@ -28,6 +28,8 @@ class _FaceDB:
         self._features = {}   # {slot_id: np_array}  运行时使用
         self._loaded = False
         self._next_slot = 1   # Step 7: 轮转覆盖指针(1-4 循环)，clear()/init_features() 读写
+        self._dirty = False        # register changed memory; flush at exit
+        self._clear_dirty = False  # clear requested; remove all .bin at exit
 
     # ── 运行时加载（APP 内 on_enter → _init_db 调用）────
 
@@ -121,18 +123,16 @@ class _FaceDB:
         """返回特征字典的引用（APP 直接修改即为内存操作）"""
         return self._features
 
-    # ── Step 7: 注册（轮转覆盖 B + 当场写盘）────────────
+    # ── Step 7: 注册（轮转覆盖 + 内存-only dirty）────────
 
     def register(self, feature):
-        """注册特征到 slot（轮转覆盖 B）+ 当场写盘。返回 slot_id(1-4)。
+        """Register feature to slot (round-robin) in MEMORY only. Returns slot_id(1-4).
 
-        - 有空 slot：填第一个空 slot（不动 _next_slot 指针）
-        - 无空 slot：覆盖 _next_slot 指向的 slot，指针 +1（1→2→3→4→1）
-        - 写内存后立刻 flush_to_disk() + _save_next_slot()（试法1）
+        No disk I/O here (pitfall #2: runtime SD write races display DMA flush).
+        Sets _dirty; persistence runs at exit stage (task_handler stopped).
 
-        ⚠️ 坑#2 延伸：register 在 AI 线程运行期执行（试法1 核心验证点），
-        若运行期写盘与 display DMA flush 竞争卡死 → 退化为"主线程
-        task_handler 间隙 flush"（试法2，fallback，本步不实现）。
+        - Empty slot first (do not move _next_slot)
+        - No empty slot: overwrite _next_slot, advance pointer (1→2→3→4→1)
         """
         slot = None
         for i in range(1, 5):
@@ -143,21 +143,40 @@ class _FaceDB:
             slot = self._next_slot
             self._next_slot = self._next_slot % 4 + 1
         self._features[slot] = feature
-        self.flush_to_disk()
-        self._save_next_slot()
-        print("[FaceDB] registered → id%d (flushed)" % slot)
+        self._dirty = True
+        self._clear_dirty = False  # a register after clear cancels the clear intent
+        print("[FaceDB] registered → id%d (memory, dirty)" % slot)
         return slot
 
     # ── 退出时刷盘（on_exit 中调用，lv.task_handler 已完成）──
 
     def flush_to_disk(self):
-        """将内存特征全部写入 .bin 文件。
+        """Exit-stage persistence. Called after task_handler stopped (pitfall #2 safe).
 
-        调用时机：FaceDetectApp.on_exit() 最开头，
-        lv.task_handler() 已返回、DMA 空闲的安全窗口。
+        - _clear_dirty: remove all .bin + .next_slot, reset pointer (clear intent)
+        - _dirty: write all memory features to .bin + save _next_slot
+        - neither: no-op
+        Resets flags after.
         """
         import os
+        if self._clear_dirty:
+            for i in range(1, 5):
+                try:
+                    os.remove(f"{_DB_DIR}/id{i}.bin")
+                except Exception:
+                    pass
+            try:
+                os.remove(_NEXT_SLOT_PATH)
+            except Exception:
+                pass
+            self._clear_dirty = False
+            self._dirty = False
+            print("[FaceDB] exit: cleared disk")
+            return
+        if not self._dirty:
+            return
         if not self._features:
+            self._dirty = False
             return
         try:
             os.mkdir(_DB_DIR)
@@ -168,43 +187,58 @@ class _FaceDB:
             try:
                 with open(path, 'wb') as f:
                     f.write(feature.tobytes())
-                print(f"[FaceDB] flushed id{i}.bin")
+                print("[FaceDB] exit: flushed id%d.bin" % i)
             except Exception as e:
-                print(f"[FaceDB] flush id{i} failed: {e}")
-
-    def clear_disk(self):
-        """删除全部 .bin 文件。
-
-        调用时机：FaceDetectApp.on_exit() 中（用户选择清除后退出时）。
-        """
-        import os
-        for i in range(1, 5):
-            try:
-                os.remove(f"{_DB_DIR}/id{i}.bin")
-            except Exception:
-                pass
-        self._features.clear()
-        print("[FaceDB] disk cleared")
+                print("[FaceDB] exit: flush id%d failed: %s" % (i, e))
+        self._save_next_slot()
+        self._dirty = False
 
     def clear(self):
-        """清内存 + 删 .bin + 删 .next_slot + _next_slot 回 1。
+        """Clear all features in MEMORY only.
 
-        供后续清除按钮用（本步不接 UI，但方法补全）。clear_disk() 只删 .bin，
-        clear() 额外删 .next_slot 并把指针回 1，确保下次注册从 id1 开始。
+        No file deletion here (pitfall #2). Sets _clear_dirty; the exit stage
+        removes all .bin + .next_slot. Cancels any pending _dirty (clear wins).
         """
-        import os
         self._features.clear()
-        for i in range(1, 5):
-            try:
-                os.remove(f"{_DB_DIR}/id{i}.bin")
-            except Exception:
-                pass
-        try:
-            os.remove(_NEXT_SLOT_PATH)
-        except Exception:
-            pass
+        self._clear_dirty = True
+        self._dirty = False
         self._next_slot = 1
-        print("[FaceDB] cleared (memory + disk + pointer)")
+        print("[FaceDB] cleared (memory, clear_dirty)")
+
+
+def database_search(feature, db_features, threshold=0.75):
+    """Cosine-match feature against db_features. Return slot_id or None.
+
+    db_features: {slot_id: np_array} (in-memory, read-only during on_frame).
+    Empty / bad / below-threshold → None. Aligns with official main2.py.
+    """
+    if not db_features:
+        return None
+    try:
+        import ulab.numpy as np
+        feat_norm = np.linalg.norm(feature)
+        if feat_norm == 0:
+            return None
+        feature = feature / feat_norm
+    except Exception:
+        return None
+    best_id = None
+    best_score = 0.0
+    for slot_id, db_feat in db_features.items():
+        try:
+            norm = np.linalg.norm(db_feat)
+            if norm == 0:
+                continue
+            db_n = db_feat / norm
+            score = np.dot(feature, db_n) / 2 + 0.5
+        except Exception:
+            continue
+        if score > best_score:
+            best_score = score
+            best_id = slot_id
+    if best_score < threshold:
+        return None
+    return best_id
 
 
 # 全局单例
