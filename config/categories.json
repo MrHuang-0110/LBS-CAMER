@@ -110,6 +110,16 @@
       "ui_mode": "stream",
       "enabled": true,
       "order": 11
+    },
+    {
+      "id": "_template",
+      "script": "_template",
+      "icon": "/sdcard/CamerAi/resource/icons/menu_icon/camera.png",
+      "name_key": "category.template",
+      "desc_key": "category.template_desc",
+      "ui_mode": "stream",
+      "enabled": true,
+      "order": 99
     }
   ]
 }

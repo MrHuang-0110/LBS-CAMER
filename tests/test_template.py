@@ -99,6 +99,21 @@ def test_template_package_init_exists():
     assert os.path.exists(init_path), "_template package __init__.py missing"
 
 
+def test_categories_json_has_template():
+    """config/categories.json must register _template category with stream ui_mode."""
+    import json
+    with open(CATEGORIES_PATH, encoding="utf-8") as f:
+        data = json.load(f)
+    cats = data.get("categories", [])
+    template = [c for c in cats if c.get("id") == "_template"]
+    assert template, "categories.json must have _template entry"
+    t = template[0]
+    assert t.get("script") == "_template", "script field must be _template"
+    assert t.get("ui_mode") == "stream", "ui_mode must be stream"
+    assert t.get("enabled", True) is True, "must be enabled"
+    assert "icon" in t, "must have icon field"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
