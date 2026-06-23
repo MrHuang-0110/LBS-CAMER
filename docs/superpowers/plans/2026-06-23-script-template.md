@@ -391,7 +391,8 @@ Expected: ALL PASS
 - [ ] **Step 5: 确认旧测试不破坏**
 
 Run: `python tests/test_face_register.py`
-Expected: ALL PASS（`test_main_face_detect_skips_init_app_sets_fpioa` 仍验 face_detect 分支保留）
+Expected: `test_main_face_detect_skips_init_app_sets_fpioa` PASS（验 face_detect 分支保留）。
+> **已知预期失败（非本 Task 引入）**：`test_face_detect_ai_thread_calls_try_register`、`test_face_detect_run_inits_id_registry` 会 FAIL——这是 face_detect app.py 早前回退到 Step 5 纯净版（去掉 Step 7 id_registry 接入）所致，face_detect 已搁置。这两个失败与 Task 4 无关，只要它们在改动前后失败集相同即可。
 
 - [ ] **Step 6: 提交**
 
@@ -820,7 +821,8 @@ Expected: ALL PASS
 - [ ] **Step 5: 确认全部 host 测试不破坏**
 
 Run: `python tests/test_framework.py && python tests/test_face_detect.py && python tests/test_face_register.py`
-Expected: 三个文件均 ALL PASS
+Expected: `test_framework.py`、`test_face_detect.py` 均 ALL PASS。
+> **已知预期失败（非本 Task 引入）**：`test_face_register.py` 中 `test_face_detect_ai_thread_calls_try_register`、`test_face_detect_run_inits_id_registry` 会 FAIL——face_detect app.py 早前回退到 Step 5 纯净版（去掉 Step 7 id_registry 接入）所致，face_detect 已搁置。这两个失败与 Task 7 无关，只要改动前后失败集相同即可。
 
 - [ ] **Step 6: 提交**
 
@@ -856,16 +858,28 @@ def test_template_build_ui_creates_top_and_bottom_bar():
 
 
 def test_template_destroy_ui_restores_screen_opacity():
-    """_destroy_ui 必须删 UI 对象 + 恢复屏幕 bg_opa=255。"""
+    """_destroy_ui 必须删 UI 对象 + 恢复屏幕 bg_opa=255，且不调 runtime.cleanup()。"""
     src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
     assert "def _destroy_ui(" in src, "_destroy_ui missing"
     assert "bg_opa(255" in src or "bg_opa(255, 0)" in src, \
         "_destroy_ui must restore screen opacity to 255 for menu"
-    # 必须不调 runtime 硬件 deinit（职责交给 main.py cleanup）
-    destroy_start = src.find("def _destroy_ui(")
-    destroy_body = src[destroy_start:src.find("def run(", destroy_start)]
-    assert "runtime.cleanup" not in destroy_body, \
-        "_destroy_ui must NOT call runtime.cleanup (main.py's job)"
+    # 必须不在 _destroy_ui 函数体内【调用】runtime.cleanup（职责交给 main.py）。
+    # 用 AST 检查真正的调用节点，避免误中 docstring/注释里的 "runtime.cleanup" 字样。
+    tree = _parse(TEMPLATE_APP_PATH)
+    destroy_fn = None
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "_destroy_ui":
+            destroy_fn = n
+            break
+    assert destroy_fn is not None, "_destroy_ui function missing"
+    for node in ast.walk(destroy_fn):
+        if isinstance(node, ast.Call):
+            func = node.func
+            # 形如 runtime.cleanup() → Attribute(attr='cleanup', value=Name(id='runtime'))
+            if (isinstance(func, ast.Attribute) and func.attr == "cleanup"
+                    and isinstance(func.value, ast.Name) and func.value.id == "runtime"):
+                raise AssertionError(
+                    "_destroy_ui must NOT call runtime.cleanup() (main.py's job)")
 
 
 def test_template_uses_runtime_sensor_not_self_init():
