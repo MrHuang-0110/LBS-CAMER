@@ -118,3 +118,138 @@ class FaceDetectionApp(AIBase):
             pass
         gc.collect()
         time.sleep_ms(50)
+
+
+class FaceRegistrationApp(AIBase):
+    """Face feature extraction (face_recognition_mobile.kmodel, 512-dim).
+
+    Uses mobile (2.65MB), not standard (44MB): LVGL leaves ~3.7MB free; standard
+    AIBase.__init__ deadlocks. Official main2.py uses standard because it has no
+    LVGL. 512-dim features → face_db EXPECTED_BYTES = 512*4.
+    """
+    def __init__(self, kmodel_path, model_input_size, rgb888p_size=None, debug_mode=0):
+        if rgb888p_size is None:
+            rgb888p_size = RGB888P_SIZE
+        super().__init__(kmodel_path, model_input_size, rgb888p_size, debug_mode)
+        self.kmodel_path = kmodel_path
+        self.model_input_size = model_input_size
+        self.rgb888p_size = [ALIGN_UP(rgb888p_size[0], 16), rgb888p_size[1]]
+        self.umeyama_args_112 = [
+            38.2946, 51.6963,
+            73.5318, 51.5014,
+            56.0252, 71.7366,
+            41.5493, 92.3655,
+            70.7299, 92.2041
+        ]
+        self.ai2d = Ai2d(debug_mode)
+        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
+                                 np.uint8, np.uint8)
+
+    def config_preprocess(self, landm, input_image_size=None):
+        import math
+        ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
+        affine_matrix = self._get_affine_matrix(landm)
+        self.ai2d.affine(nn.interp_method.cv2_bilinear, 0, 0, 127, 1, affine_matrix)
+        self.ai2d.build(
+            [1, 3, ai2d_input_size[1], ai2d_input_size[0]],
+            [1, 3, self.model_input_size[1], self.model_input_size[0]])
+
+    def _get_affine_matrix(self, sparse_points):
+        matrix_dst = self._image_umeyama_112(sparse_points)
+        return [matrix_dst[0][0], matrix_dst[0][1], matrix_dst[0][2],
+                matrix_dst[1][0], matrix_dst[1][1], matrix_dst[1][2]]
+
+    def _image_umeyama_112(self, src):
+        SRC_NUM = 5
+        src_mean = [0.0, 0.0]
+        dst_mean = [0.0, 0.0]
+        for i in range(0, SRC_NUM * 2, 2):
+            src_mean[0] += src[i]
+            src_mean[1] += src[i + 1]
+            dst_mean[0] += self.umeyama_args_112[i]
+            dst_mean[1] += self.umeyama_args_112[i + 1]
+        src_mean[0] /= SRC_NUM
+        src_mean[1] /= SRC_NUM
+        dst_mean[0] /= SRC_NUM
+        dst_mean[1] /= SRC_NUM
+        src_demean = [[0.0, 0.0] for _ in range(SRC_NUM)]
+        dst_demean = [[0.0, 0.0] for _ in range(SRC_NUM)]
+        for i in range(SRC_NUM):
+            src_demean[i][0] = src[2 * i] - src_mean[0]
+            src_demean[i][1] = src[2 * i + 1] - src_mean[1]
+            dst_demean[i][0] = self.umeyama_args_112[2 * i] - dst_mean[0]
+            dst_demean[i][1] = self.umeyama_args_112[2 * i + 1] - dst_mean[1]
+        A = [[0.0, 0.0], [0.0, 0.0]]
+        for i in range(2):
+            for k in range(2):
+                for j in range(SRC_NUM):
+                    A[i][k] += dst_demean[j][i] * src_demean[j][k]
+                A[i][k] /= SRC_NUM
+        T = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+        U, S, V = self._svd22([A[0][0], A[0][1], A[1][0], A[1][1]])
+        T[0][0] = U[0] * V[0] + U[1] * V[2]
+        T[0][1] = U[0] * V[1] + U[1] * V[3]
+        T[1][0] = U[2] * V[0] + U[3] * V[2]
+        T[1][1] = U[2] * V[1] + U[3] * V[3]
+        src_demean_mean = [0.0, 0.0]
+        src_demean_var = [0.0, 0.0]
+        for i in range(SRC_NUM):
+            src_demean_mean[0] += src_demean[i][0]
+            src_demean_mean[1] += src_demean[i][1]
+        src_demean_mean[0] /= SRC_NUM
+        src_demean_mean[1] /= SRC_NUM
+        for i in range(SRC_NUM):
+            src_demean_var[0] += (src_demean_mean[0] - src_demean[i][0]) ** 2
+            src_demean_var[1] += (src_demean_mean[1] - src_demean[i][1]) ** 2
+        src_demean_var[0] /= SRC_NUM
+        src_demean_var[1] /= SRC_NUM
+        scale = 1.0 / (src_demean_var[0] + src_demean_var[1]) * (S[0] + S[1])
+        T[0][2] = dst_mean[0] - scale * (T[0][0] * src_mean[0] + T[0][1] * src_mean[1])
+        T[1][2] = dst_mean[1] - scale * (T[1][0] * src_mean[0] + T[1][1] * src_mean[1])
+        T[0][0] *= scale
+        T[0][1] *= scale
+        T[1][0] *= scale
+        T[1][1] *= scale
+        return T
+
+    def _svd22(self, a):
+        import math
+        s = [0.0, 0.0]
+        u = [0.0, 0.0, 0.0, 0.0]
+        v = [0.0, 0.0, 0.0, 0.0]
+        s[0] = (math.sqrt((a[0] - a[3]) ** 2 + (a[1] + a[2]) ** 2)
+                + math.sqrt((a[0] + a[3]) ** 2 + (a[1] - a[2]) ** 2)) / 2
+        s[1] = abs(s[0] - math.sqrt((a[0] - a[3]) ** 2 + (a[1] + a[2]) ** 2))
+        v[2] = math.sin(math.atan2(
+            2 * (a[0] * a[1] + a[2] * a[3]),
+            a[0] ** 2 - a[1] ** 2 + a[2] ** 2 - a[3] ** 2) / 2) if s[0] > s[1] else 0
+        v[0] = math.sqrt(1 - v[2] ** 2)
+        v[1] = -v[2]
+        v[3] = v[0]
+        u[0] = -(a[0] * v[0] + a[1] * v[2]) / s[0] if s[0] != 0 else 1
+        u[2] = -(a[2] * v[0] + a[3] * v[2]) / s[0] if s[0] != 0 else 0
+        u[1] = (a[0] * v[1] + a[1] * v[3]) / s[1] if s[1] != 0 else -u[2]
+        u[3] = (a[2] * v[1] + a[3] * v[3]) / s[1] if s[1] != 0 else u[0]
+        v[0] = -v[0]
+        v[2] = -v[2]
+        return u, s, v
+
+    def postprocess(self, results):
+        return results[0][0]
+
+    def deinit(self):
+        try:
+            del self.kpu
+        except Exception:
+            pass
+        try:
+            del self.ai2d
+        except Exception:
+            pass
+        try:
+            self.tensors.clear()
+            del self.tensors
+        except Exception:
+            pass
+        gc.collect()
+        time.sleep_ms(50)

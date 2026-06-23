@@ -59,10 +59,30 @@ def test_face_detection_draw_result_keeps_recognition_signature():
     raise AssertionError("FaceDetectionApp.draw_result missing")
 
 
-def test_face_ai_phase1_does_not_define_registration_app():
+def test_face_ai_defines_registration_app():
+    tree = _parse(FACE_AI_PATH)
+    _class_node(tree, "FaceRegistrationApp")
+
+
+def test_registration_app_loads_mobile_kmodel():
     src = open(FACE_AI_PATH, encoding="utf-8").read()
-    assert "FaceRegistrationApp" not in src, \
-        "Phase 1 core/face_ai.py should only extract detection; registration belongs to Phase 3"
+    assert "face_recognition_mobile.kmodel" in src, \
+        "FaceRegistrationApp must use mobile kmodel (2.65MB, 512-dim)"
+    assert "face_recognition.kmodel\"" not in src and "'face_recognition.kmodel'" not in src, \
+        "must NOT use standard 44MB face_recognition.kmodel (OOM deadlock, pitfall #19)"
+
+
+def test_registration_config_preprocess_takes_landm():
+    tree = _parse(FACE_AI_PATH)
+    cls = _class_node(tree, "FaceRegistrationApp")
+    found = False
+    for node in cls.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "config_preprocess":
+            arg_names = [a.arg for a in node.args.args]
+            assert "landm" in arg_names, \
+                "config_preprocess must take landm (5-point landmarks for umeyama+affine)"
+            found = True
+    assert found, "FaceRegistrationApp.config_preprocess missing"
 
 
 def test_runner():
