@@ -126,6 +126,13 @@ def run_script(category_id):
             _sys.print_exception(e)
     else:
         print("[CamerAi] script has no run(): %s" % category_id)
+    # 统一 deinit：非 face_detect 脚本由 runtime.cleanup() 释放硬件
+    # （face_detect 搁置，自管 media，不调 cleanup 避免冲突）
+    if category_id != "face_detect":
+        try:
+            runtime.cleanup()
+        except Exception as e:
+            print("[CamerAi] cleanup error: %s" % e)
     _clear_next_script()
     machine.reset()
 

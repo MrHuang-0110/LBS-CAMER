@@ -68,6 +68,21 @@ def test_channels_for_template_single_channel():
     assert "_template" in body, "_channels_for body must contain _template branch"
 
 
+def test_main_run_script_calls_cleanup_skipping_face_detect():
+    """run_script must call runtime.cleanup() for non-face_detect scripts."""
+    src = open(MAIN_PATH, encoding="utf-8").read()
+    # 必须有 cleanup 调用
+    assert "runtime.cleanup()" in src, \
+        "run_script must call runtime.cleanup() after mod.run()"
+    # face_detect 分支保留（搁置，不调 cleanup）
+    assert 'category_id == "face_detect"' in src, \
+        "face_detect special branch must be preserved"
+    # cleanup 必须有条件跳过 face_detect
+    assert ('category_id != "face_detect"' in src
+            or 'category_id == "face_detect"' in src), \
+        "cleanup must be skipped for face_detect"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
