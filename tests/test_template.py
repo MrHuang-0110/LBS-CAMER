@@ -42,6 +42,18 @@ def test_lvgl_init_takes_render_mode_param():
         raise AssertionError("AppRuntime class missing")
 
 
+def test_init_app_passes_render_mode_for_stream():
+    """init_app must select PARTIAL for stream ui_mode, FULL otherwise."""
+    src = open(APP_RUNTIME_PATH, encoding="utf-8").read()
+    # init_app 必须根据 ui_mode 决定 render_mode 并传给 _lvgl_init
+    assert "DISP_RENDER_MODE.PARTIAL" in src, \
+        "init_app must use PARTIAL for stream ui_mode"
+    assert "_lvgl_init(" in src, \
+        "init_app must call _lvgl_init with computed render_mode"
+    # 必须从 ui_mode 判定（ConfigManager 查 category 的 ui_mode）
+    assert "ui_mode" in src, "init_app must read ui_mode to decide render_mode"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())

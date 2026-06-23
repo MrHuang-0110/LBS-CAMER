@@ -143,8 +143,19 @@ class AppRuntime:
         # 3. MediaManager.init（sensor 配置后）
         MediaManager.init()
         self._init_backlight(fpioa)
+        # render mode 按 ui_mode：stream 用 PARTIAL（顶底栏静态+预览透明，只刷脏区，
+        # 避开 FULL 整屏 DMA 与 OSD1 推帧竞争）；menu/page 用 FULL（全屏重绘）。
+        # PARTIAL 板端若 flush_cb 异常，退路：此处改回 FULL（单线程下仍稳）。
+        from core.config_manager import ConfigManager as _CM
+        _cm = _CM()
+        _cm.load()
+        _cat = _cm.get_category(category_id)
+        _ui_mode = _cat.get("ui_mode", "") if _cat else ""
+        _render_mode = (lv.DISP_RENDER_MODE.PARTIAL
+                        if _ui_mode == "stream"
+                        else lv.DISP_RENDER_MODE.FULL)
         lv.init()
-        self._lvgl_init()
+        self._lvgl_init(_render_mode)
         self._init_touch()
         from core.font_manager import fonts
         try:
