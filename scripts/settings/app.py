@@ -15,6 +15,9 @@ from core.event_bus import event_bus
 from core.icon_cache import icon_cache
 from ui.theme import Colors, make_back_bar_text_style
 from core.font_manager import fonts
+import os
+import time
+from media.display import Display
 
 
 # ── 布局参数 ──────────────────────────────────────
@@ -33,6 +36,27 @@ LANG_ROW_H = 48     # 语言行高
 ABOUT_ROW_H = 44    # 关于行高
 DIVIDER_W = 4       # 左右栏分界线宽度
 DIVIDER_COLOR = 0x555555  # 分界线颜色（比两侧面板亮）
+
+# ── 模块级 UI 引用（替代旧类的 self._xxx）──
+_screen = None
+_top_bar = None
+_left_panel = None
+_right_panel = None
+_divider = None
+_rows = []
+_active_item = "language"
+
+
+def run(runtime):
+    """settings 主入口（reset 框架调 mod.run(runtime)）。page 型，无取帧。"""
+    global _active_item
+    _active_item = "language"
+    exit_flag = [False]
+    _build_ui(runtime, exit_flag)
+    while not exit_flag[0]:
+        os.exitpoint()
+        time.sleep_ms(lv.task_handler())
+    _destroy_ui()
 
 
 def _png_zoom(png_data, target):
