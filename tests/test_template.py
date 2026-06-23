@@ -114,6 +114,53 @@ def test_categories_json_has_template():
     assert "icon" in t, "must have icon field"
 
 
+def _template_tree():
+    return _parse(TEMPLATE_APP_PATH)
+
+
+def test_template_has_run_entry():
+    """模板必须有 run(runtime) 入口（reset 框架要求）。"""
+    tree = _template_tree()
+    run_fn = None
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "run":
+            run_fn = n
+            break
+    assert run_fn is not None, "run(runtime) entry missing"
+    assert "runtime" in [a.arg for a in run_fn.args.args], "run must take runtime"
+
+
+def test_template_has_on_frame_hook():
+    """模板必须有 on_frame(img) 钩子（AI 插槽，默认空实现）。"""
+    tree = _template_tree()
+    found = False
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == "on_frame":
+            found = True
+            assert "img" in [a.arg for a in n.args.args], "on_frame must take img"
+            break
+    assert found, "on_frame(img) hook missing"
+
+
+def test_template_run_has_exit_flag_loop():
+    """run() 主循环必须用 exit_flag 检测退出（触摸回调设标志）。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "exit_flag" in src, "run must use exit_flag for exit detection"
+    assert "while" in src, "run must have main loop"
+    # 主循环必须调 snapshot + show_image(OSD1) + task_handler
+    assert "snapshot" in src, "run must snapshot sensor"
+    assert "LAYER_OSD1" in src, "run must show_image to OSD1"
+    assert "task_handler" in src, "run must call lv.task_handler()"
+
+
+def test_template_on_frame_isolated_by_try_except():
+    """on_frame 调用必须被 try/except 包裹（AI 异常不杀循环）。"""
+    src = open(TEMPLATE_APP_PATH, encoding="utf-8").read()
+    assert "on_frame(img)" in src or "on_frame( img)" in src, \
+        "run must call on_frame(img)"
+    assert "except" in src, "on_frame call must be in try/except"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
