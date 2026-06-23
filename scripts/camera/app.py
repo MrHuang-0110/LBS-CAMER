@@ -12,6 +12,7 @@
 # 状态机：PHOTO ←→ VIDEO → RECORDING，任意待机态 → GALLERY
 
 import struct
+import time
 import lvgl as lv
 from media.display import Display
 import image as _image_lib  # K230 JPEG 硬件解码（lv.task_handler 外安全）
@@ -89,6 +90,34 @@ def _make_icon(parent, icon_data, icon_dsc, target_size, x, y):
     actual_x = x - (src_w - rendered_w) // 2
     img.align(lv.ALIGN.LEFT_MID, actual_x, 0)
     return img, actual_x
+
+
+# ── reset 框架入口（迁移中：CameraApp 类业务逐步平移到下方函数）──
+_RUNTIME = None
+
+
+def run(runtime):
+    """camera 主入口(reset 框架调 mod.run(runtime))。
+
+    单线程主循环:chn0 预览帧 → OSD1 + 状态业务(录像计时/白闪) + task_handler。
+    触摸返回钮设 exit_flag → 循环退出 → _destroy_ui → main.py cleanup+reset 回菜单。
+    """
+    global _RUNTIME
+    _RUNTIME = runtime
+    exit_flag = [False]
+    _build_ui(runtime, exit_flag)
+    while not exit_flag[0]:
+        os.exitpoint()
+        time.sleep_ms(lv.task_handler())
+    _destroy_ui()
+
+
+def _build_ui(runtime, exit_flag):
+    pass
+
+
+def _destroy_ui():
+    pass
 
 
 class CameraApp(BaseScript):
