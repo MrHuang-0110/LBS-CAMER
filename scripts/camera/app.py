@@ -801,7 +801,7 @@ def _remove_photo_from_groups(groups, photo):
 
 def _rebuild_gallery_ui():
     """删除旧列表对象,按当前 _gallery_groups 重建。"""
-    global _gallery_objects
+    global _gallery_objects, _gallery_list
     old_objects = _gallery_objects
     _gallery_objects = []
 
@@ -859,7 +859,7 @@ def _process_pending_deletes():
 
 def _leave_gallery():
     """离开图库,清理 LVGL 对象 + 恢复相机 UI。"""
-    global _state
+    global _state, _gallery_list, _gallery_groups
 
     for obj in _gallery_objects:
         try:

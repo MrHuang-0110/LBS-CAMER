@@ -164,6 +164,66 @@ def test_run_loop_processes_pending_deletes():
         "run() main loop must call _process_pending_deletes"
 
 
+def test_rebuild_gallery_ui_decls_global_gallery_list():
+    """_rebuild_gallery_ui 必须 global 声明 _gallery_list。
+
+    根因:函数内 `_gallery_list = None` 赋值使 _gallery_list 成为局部变量
+    (Python 作用域规则),导致前面 `if _gallery_list is not None:` 引用未赋值
+    局部变量 → UnboundLocalError("local variable referenced before assignment")。
+    板端现象:图库删照片后 _rebuild_gallery_ui 报 NameError 重启。
+    必须显式 `global _gallery_list`。
+    """
+    tree = _parse(APP_PATH)
+    fn = _function_node(tree, "_rebuild_gallery_ui")
+    globals_declared = set()
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Global):
+            for name in node.names:
+                globals_declared.add(name)
+    assert "_gallery_list" in globals_declared, \
+        "_rebuild_gallery_ui must declare 'global _gallery_list' (it assigns _gallery_list=None)"
+
+
+def test_no_missing_global_decls():
+    """全局扫描:所有函数中对模块级变量赋值,必须 global 声明。
+
+    防御 _rebuild_gallery_ui/_leave_gallery 同类 UnboundLocalError 根因复发:
+    函数内对模块级变量赋值(=)却不声明 global → 变量变局部 → 同函数内先前
+    的读取引用未赋值局部变量 → NameError 重启。此测试扫描全文件,任一函数
+    违反即 FAIL。
+    """
+    tree = _parse(APP_PATH)
+    # 收集模块级赋值变量名
+    mod_names = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    mod_names.add(t.id)
+
+    missing = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        globals_decl = set()
+        for n in ast.walk(node):
+            if isinstance(n, ast.Global):
+                globals_decl.update(n.names)
+        assigned = set()
+        for n in ast.walk(node):
+            if isinstance(n, ast.Assign):
+                for t in n.targets:
+                    if isinstance(t, ast.Name):
+                        assigned.add(t.id)
+            elif isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name):
+                assigned.add(n.target.id)
+        for a in assigned:
+            if a in mod_names and a not in globals_decl:
+                missing.append("%s: %s" % (node.name, a))
+    assert not missing, \
+        "missing global declarations (would cause UnboundLocalError): %s" % missing
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
