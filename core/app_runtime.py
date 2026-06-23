@@ -162,6 +162,9 @@ class AppRuntime:
             fonts.load_all()
         except Exception as e:
             print("[Runtime] font load warning: %s" % e)
+        # 预读顶栏返回钮图标（脚本顶栏 BackBar 用，task_handler 前完成文件 I/O）
+        from core.icon_cache import icon_cache
+        icon_cache.preload_back_icon()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()

@@ -6,6 +6,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUNTIME_PATH = os.path.join(ROOT, "core", "app_runtime.py")
 MAIN_PATH = os.path.join(ROOT, "main.py")
+ICON_CACHE_PATH = os.path.join(ROOT, "core", "icon_cache.py")
 
 
 def _parse(path):
@@ -58,6 +59,28 @@ def test_main_has_launch_writer():
     src = open(MAIN_PATH, encoding="utf-8").read()
     assert "next_script" in src and ("wb" in src or "write" in src.lower()), \
         "main.py must write .next_script on card click"
+
+
+def test_icon_cache_has_preload_back_icon():
+    """icon_cache 必须有独立 preload_back_icon() 方法（供 init_app 预读返回钮图标）。
+
+    根因：_back_icon 原本只在 preload_settings_icons() 里预读，而该方法只在
+    init_menu 调用。走 init_app 的脚本（模板/settings）顶栏返回钮用
+    get_back_icon() 拿不到图标。需独立 preload_back_icon() 供 init_app 调。
+    """
+    src = open(ICON_CACHE_PATH, encoding="utf-8").read()
+    assert "def preload_back_icon(" in src, \
+        "icon_cache must have standalone preload_back_icon() method"
+
+
+def test_init_app_preloads_back_icon():
+    """init_app 必须调 preload_back_icon()（脚本顶栏返回钮需要图标）。"""
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    init_start = src.find("def init_app(")
+    assert init_start != -1, "init_app missing"
+    init_body = src[init_start:]
+    assert "preload_back_icon" in init_body, \
+        "init_app must call icon_cache.preload_back_icon() for top bar back button"
 
 
 if __name__ == "__main__":

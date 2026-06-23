@@ -38,6 +38,17 @@ class _IconCache:
                 print(f"[IconCache] settings/{item_id} FAILED: {e}")
 
         # 同时预读返回按钮图标
+        self.preload_back_icon()
+
+    def preload_back_icon(self):
+        """独立预读返回按钮图标（供 init_app 调用，脚本顶栏返回钮需要）。
+
+        _back_icon 原本只在 preload_settings_icons()（仅 init_menu 调）里预读，
+        走 init_app 的脚本（模板/settings）顶栏返回钮拿不到图标。本方法独立
+        预读，供 init_app 调用。幂等：已预读则跳过。
+        """
+        if self._back_icon is not None:
+            return
         back_path = "/sdcard/CamerAi/resource/icons/settings_icon/back.png"
         try:
             with open(back_path, 'rb') as f:
