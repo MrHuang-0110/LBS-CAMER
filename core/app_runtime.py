@@ -69,7 +69,7 @@ class AppRuntime:
             self.sensor.set_framesize(framesize, chn=chn_id)
             self.sensor.set_pixformat(pixformat, chn=chn_id)
 
-    def _lvgl_init(self):
+    def _lvgl_init(self, render_mode=lv.DISP_RENDER_MODE.FULL):
         self.draw_buf_1 = image.Image(self.width, self.height, image.BGRA8888)
         self.draw_buf_2 = image.Image(self.width, self.height, image.BGRA8888)
         self.draw_buf_1.clear()
@@ -79,7 +79,7 @@ class AppRuntime:
         self.lv_disp.set_color_format(lv.COLOR_FORMAT.ARGB8888)
         self.lv_disp.set_draw_buffers(
             self.draw_buf_1.bytearray(), self.draw_buf_2.bytearray(),
-            self.draw_buf_1.size(), lv.DISP_RENDER_MODE.FULL)
+            self.draw_buf_1.size(), render_mode)
 
     def _flush_cb(self, disp, area, px_map):
         """LVGL flush 回调（对齐官方 ai_lvgl.py disp_drv_flush_cb）。"""
