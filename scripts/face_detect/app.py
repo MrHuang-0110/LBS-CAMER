@@ -3,6 +3,7 @@
 # Core loop: snapshot chn0 → on_frame(chn2 AI detect + draw boxes) → show_image →
 # lv.task_handler. No AI thread, no self media init, no registration/DB in Phase 1.
 
+import gc
 import os
 import sys
 import time
@@ -64,6 +65,7 @@ def on_frame(img):
     img_np = img_ai.to_numpy_ref()
     det_boxes, landms = _face_det.run(img_np)
     _face_det.draw_result(img, det_boxes)
+    gc.collect()
 
 
 def _build_ui(runtime, exit_flag):

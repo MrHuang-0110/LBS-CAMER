@@ -120,6 +120,19 @@ def test_file_io_paths_are_in_init_not_on_frame():
         "on_frame must not perform file I/O"
 
 
+def test_on_frame_collects_gc_after_npu_run():
+    """K230 NPU buffers accumulate without per-frame GC and face_det.run hangs.
+
+    Board evidence: Phase1 single-thread reached frame47 and stopped after
+    to_numpy_ref, before after-face_det.run log. No LVGL objects are created or
+    deleted in on_frame, so a post-inference gc.collect is the minimal safe fix.
+    """
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    assert "gc.collect()" in src, "on_frame must collect GC after NPU run/draw"
+
+
 def test_template_ui_helpers_exist():
     tree = _parse()
     funcs = _module_function_names(tree)
