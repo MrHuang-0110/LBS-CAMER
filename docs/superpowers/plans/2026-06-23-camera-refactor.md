@@ -238,7 +238,7 @@ Expected: FAIL — Task 1 的 2 个测试 PASS,新增 5 个 FAIL(CameraApp 类�
 # 消除双线程双写者 display DMA 竞争。
 #
 # 传感器:每进程独立 runtime.sensor(init_app 已配 chn0 VGA/RGB888 预览 +
-# chn1 SXGAM/RGB565 拍照 + sensor.run())。退出由 main.py runtime.cleanup()
+# chn1 SXGAM/RGB565 拍照,并由 init_app 启动取流)。退出由 main.py runtime.cleanup()
 # 统一 stop + deinit,不再用旧架构的共享常驻 lcd sensor。
 #
 # 状态机:PHOTO ←→ VIDEO → RECORDING,任意待机态 → GALLERY
