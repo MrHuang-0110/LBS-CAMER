@@ -244,6 +244,45 @@ def test_title_is_recognition():
     assert "人脸识别" in src, "title should be 人脸识别"
 
 
+def test_face_detect_on_frame_recognizes_all_faces():
+    """on_frame 必须对每个检测框跑 reg（识全部脸），不再只取 max_i。
+
+    断言 on_frame 源码含遍历 det_boxes 的 reg 循环 + database_search。
+    """
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    # 识全部脸：遍历检测框跑 reg（不再只 max_i 单次）
+    assert "for i in range(len(det_boxes))" in src or \
+           "for i, " in src, \
+        "on_frame must loop over all det_boxes to run reg per face"
+    assert "database_search" in src, "on_frame must call database_search per face"
+    assert "config_preprocess(landms" in src, \
+        "on_frame must config_preprocess per-face landmarks"
+
+
+def test_face_detect_on_frame_builds_four_slots():
+    """on_frame 必须构建4槽位 list（slots[mid-1]=...）并调 host_tick(slots)。"""
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    assert "slots = [None, None, None, None]" in src, \
+        "on_frame must init 4-slot list"
+    assert "slots[mid - 1]" in src or "slots[mid-1]" in src, \
+        "on_frame must fill slot by matched id (slots[mid-1])"
+    assert "host_tick(slots)" in src, \
+        "on_frame must call host_tick(slots)"
+
+
+def test_face_detect_on_frame_still_supports_k2_register():
+    """on_frame 仍保留 K2 注册逻辑（最大脸注册），has_pending + try_register。"""
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    assert "has_pending" in src, "on_frame must keep K2 has_pending check"
+    assert "try_register" in src, "on_frame must keep try_register"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
