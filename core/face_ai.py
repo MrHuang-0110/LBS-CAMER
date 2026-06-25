@@ -63,6 +63,7 @@ class FaceDetectionApp(AIBase):
                                  np.uint8, np.uint8)
 
     def config_preprocess(self, input_image_size=None):
+        gc.collect()
         with ScopedTiming("set preprocess config", self.debug_mode > 0):
             ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
             top, bottom, left, right, _ = letterbox_pad_param(
@@ -146,6 +147,7 @@ class FaceRegistrationApp(AIBase):
                                  np.uint8, np.uint8)
 
     def config_preprocess(self, landm, input_image_size=None):
+        gc.collect()
         import math
         ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
         affine_matrix = self._get_affine_matrix(landm)

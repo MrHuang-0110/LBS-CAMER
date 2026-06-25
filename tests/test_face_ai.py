@@ -85,6 +85,44 @@ def test_registration_config_preprocess_takes_landm():
     assert found, "FaceRegistrationApp.config_preprocess missing"
 
 
+def _config_preprocess_first_stmts(cls_node):
+    """Return the source of the first 3 statements of config_preprocess (excl docstring)."""
+    for node in cls_node.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "config_preprocess":
+            stmts = [n for n in node.body if not isinstance(n, ast.Expr) or not isinstance(n.value, ast.Constant)]
+            src = ""
+            for s in stmts[:3]:
+                seg = ast.get_source_segment(open(FACE_AI_PATH, encoding="utf-8").read(), s)
+                if seg:
+                    src += seg + "\n"
+            return src
+    return ""
+
+
+def test_det_config_preprocess_collects_gc_first():
+    """face_det.config_preprocess must gc.collect() early (align old working dual-kmodel code).
+
+    Board root cause (dual-kmodel hang): AI2D build per frame accumulates native buffers;
+    without gc before build the NPU/AI2D pool overflows under two kmodels → face_det.run
+    hangs (frame1, screen freeze). Old working commit 2a094d6 had gc.collect() as the
+    first statement of every config_preprocess. Pitfall #16/#19.
+    """
+    tree = _parse(FACE_AI_PATH)
+    cls = _class_node(tree, "FaceDetectionApp")
+    src = _config_preprocess_first_stmts(cls)
+    assert "gc.collect()" in src, \
+        "FaceDetectionApp.config_preprocess must call gc.collect() in its first statements"
+
+
+def test_reg_config_preprocess_collects_gc_first():
+    """face_reg.config_preprocess must gc.collect() early (same root cause as det)."""
+    tree = _parse(FACE_AI_PATH)
+    cls = _class_node(tree, "FaceRegistrationApp")
+    src = _config_preprocess_first_stmts(cls)
+    assert "gc.collect()" in src, \
+        "FaceRegistrationApp.config_preprocess must call gc.collect() in its first statements"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
