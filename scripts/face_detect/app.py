@@ -41,10 +41,17 @@ _close_overlay = False
 
 
 def _init_ai():
-    """Load detection kmodel, anchors, and db_features before the loop."""
-    global _face_det, _db_features
+    """Load BOTH kmodels + db_features before the loop.
+
+    ⚠️ 双 kmodel 顺序根因（板端 frame1 卡死黑屏）：face_reg kmodel 必须在
+    face_det.config_preprocess() 之前加载。若 config_preprocess（build face_det
+    AI2D）先执行，再加载第二 kmodel 会破坏共享 NPU/AI2D 状态 → 后续 face_det.run
+    卡死。对齐旧 Step4 修订：两个 kmodel 都先加载，再 config_preprocess。坑#19。
+    """
+    global _face_det, _face_reg, _db_features
     anchors_path = "/sdcard/examples/utils/prior_data_320.bin"
     det_kmodel = "/sdcard/examples/kmodel/face_detection_320.kmodel"
+    reg_kmodel = "/sdcard/examples/kmodel/face_recognition_mobile.kmodel"
     print("[face_detect] loading anchors...")
     anchors = np.fromfile(anchors_path, dtype=np.float)
     anchors = anchors.reshape((4200, 4))
@@ -53,6 +60,16 @@ def _init_ai():
                                  confidence_threshold=0.5, nms_threshold=0.2,
                                  rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
                                  debug_mode=0)
+    print("[face_detect] loading reg kmodel...")
+    try:
+        _face_reg = FaceRegistrationApp(reg_kmodel, model_input_size=[112, 112],
+                                        rgb888p_size=RGB888P_SIZE, debug_mode=0)
+        print("[face_detect] reg kmodel ready (512-dim)")
+    except Exception as e:
+        print("[face_detect] reg kmodel FAILED: %s" % e)
+        sys.print_exception(e)
+        _face_reg = None
+    # 两个 kmodel 都加载完，才 build face_det 的 AI2D（顺序根因）
     _face_det.config_preprocess()
     _db_features = face_db.init_features()
     print("[face_detect] db loaded: %d face(s)" % len(_db_features))
@@ -316,20 +333,10 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME, _face_reg
+    global _RUNTIME
     _RUNTIME = runtime
     exit_flag = [False]
     _init_ai()
-    reg_kmodel = "/sdcard/examples/kmodel/face_recognition_mobile.kmodel"
-    print("[face_detect] loading reg kmodel...")
-    try:
-        _face_reg = FaceRegistrationApp(reg_kmodel, model_input_size=[112, 112],
-                                        rgb888p_size=RGB888P_SIZE, debug_mode=0)
-        print("[face_detect] reg kmodel ready (512-dim)")
-    except Exception as e:
-        print("[face_detect] reg kmodel FAILED: %s" % e)
-        sys.print_exception(e)
-        _face_reg = None
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
     fc = 0

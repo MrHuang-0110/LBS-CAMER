@@ -145,13 +145,47 @@ def test_face_detect_imports_recognition_assets():
 
 
 def test_run_loads_face_reg_kmodel_before_loop():
-    tree = _parse()
-    run_fn = _function_node(tree, "run")
-    src = ast.get_source_segment(_src(), run_fn) or ""
-    assert "face_recognition_mobile.kmodel" in src, "run() must load mobile reg kmodel"
-    assert "FaceRegistrationApp(" in src, "run() must construct FaceRegistrationApp"
+    """Both kmodels must be loaded before the main loop (pitfall #18).
+
+    face_reg construction lives in _init_ai (see test_face_reg_built_before_det_preprocess);
+    run() calls _init_ai before the loop, so the reg kmodel path appears in the whole app
+    source, constructed before 'while not exit_flag'.
+    """
+    src = _src()
+    assert "face_recognition_mobile.kmodel" in src, "must load mobile reg kmodel"
+    assert "FaceRegistrationApp(" in src, "must construct FaceRegistrationApp"
     assert src.find("FaceRegistrationApp(") < src.find("while not exit_flag"), \
         "face_reg must be constructed before the main loop (pitfall #18)"
+
+
+def test_face_reg_built_before_det_preprocess():
+    """face_reg kmodel must load BEFORE face_det.config_preprocess().
+
+    Board root cause (dual-kmodel hang): loading the second kmodel (face_reg) AFTER
+    face_det.config_preprocess() builds face_det's AI2D corrupts the shared NPU/AI2D
+    state → frame1 hang + black screen, even with per-frame gc. Both kmodels must be
+    loaded first, then config_preprocess. Aligns with old Step4 revision.
+
+    Checked via AST inside _init_ai (excludes docstrings) so the order of actual
+    statements is what's verified, not comment text.
+    """
+    tree = _parse()
+    init_fn = _function_node(tree, "_init_ai")
+    reg_line = None
+    pre_line = None
+    for node in ast.walk(init_fn):
+        if isinstance(node, ast.Call):
+            # FaceRegistrationApp(...) construction
+            if isinstance(node.func, ast.Name) and node.func.id == "FaceRegistrationApp":
+                reg_line = node.lineno
+            # <something>.config_preprocess() call
+            if isinstance(node.func, ast.Attribute) and node.func.attr == "config_preprocess":
+                pre_line = node.lineno
+    assert reg_line is not None, "_init_ai must construct FaceRegistrationApp"
+    assert pre_line is not None, "_init_ai must call config_preprocess"
+    assert reg_line < pre_line, \
+        "FaceRegistrationApp must be constructed BEFORE face_det.config_preprocess() " \
+        "(dual-kmodel NPU state corruption → frame1 hang)"
 
 
 def test_run_main_loop_polls_k2():
