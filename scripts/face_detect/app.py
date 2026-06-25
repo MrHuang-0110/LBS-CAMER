@@ -116,7 +116,7 @@ def on_frame(img):
             try:
                 _face_reg.config_preprocess(landms[i])
                 feature = _face_reg.run(img_np)
-                mid = database_search(feature, _db_features)
+                mid, score = database_search(feature, _db_features)
                 if mid is not None:
                     recognition_results.append((i, mid))
                     det = det_boxes[i]
@@ -125,7 +125,7 @@ def on_frame(img):
                     y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
                     w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
                     h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-                    conf = int(det[4] * 100) if len(det) > 4 else 0
+                    conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
                     if 1 <= mid <= 4:
                         slots[mid - 1] = (mid, x, y, w, h, conf)
             except Exception as e:

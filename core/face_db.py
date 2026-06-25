@@ -128,21 +128,22 @@ class _FaceDB:
 
 
 def database_search(feature, db_features, threshold=0.75):
-    """Cosine-match feature against db_features. Return slot_id or None.
+    """Cosine-match feature against db_features. Return (slot_id, score) or (None, 0.0).
 
     db_features: {slot_id: np_array} (in-memory, read-only during on_frame).
-    Empty / bad / below-threshold → None. Aligns with official main2.py.
+    Empty / bad / below-threshold → (None, 0.0). score = 余弦匹配度(0-1),
+    用作上位机置信度。Aligns with official main2.py。
     """
     if not db_features:
-        return None
+        return None, 0.0
     try:
         import ulab.numpy as np
         feat_norm = np.linalg.norm(feature)
         if feat_norm == 0:
-            return None
+            return None, 0.0
         feature = feature / feat_norm
     except Exception:
-        return None
+        return None, 0.0
     best_id = None
     best_score = 0.0
     for slot_id, db_feat in db_features.items():
@@ -158,8 +159,8 @@ def database_search(feature, db_features, threshold=0.75):
             best_score = score
             best_id = slot_id
     if best_score < threshold:
-        return None
-    return best_id
+        return None, 0.0
+    return best_id, best_score
 
 
 # 全局单例

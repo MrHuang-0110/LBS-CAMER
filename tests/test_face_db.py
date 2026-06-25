@@ -44,6 +44,32 @@ def test_face_db_defines_database_search():
     assert "def database_search" in src, "face_db must define database_search"
 
 
+def test_database_search_returns_score_for_confidence():
+    """database_search 必须返回 (slot_id, score),把匹配度带出来给置信度用。
+
+    根因:置信度是 face_reg 特征与 DB 特征的余弦匹配度,需自己算(检测框 det
+    不含匹配度)。database_search 内部已算 best_score(0-1)却只返回 slot_id,
+    丢了 score → on_frame 拿不到匹配度 → conf 误用 det[4] → 一直0。
+    返回 (best_id, best_score),None 时返回 (None, 0.0)。
+    """
+    src = _src()
+    # database_search 是模块级函数;取其函数段
+    import ast as _ast
+    tree = _ast.parse(src, filename=DB_PATH)
+    fn = None
+    for node in tree.body:
+        if isinstance(node, _ast.FunctionDef) and node.name == "database_search":
+            fn = node
+            break
+    assert fn is not None, "database_search function missing"
+    seg = _ast.get_source_segment(src, fn) or ""
+    # 命中分支返回 tuple,不得只返回裸 best_id
+    assert "return best_id, best_score" in seg or "return (best_id, best_score)" in seg, \
+        "database_search must return (best_id, best_score) tuple so confidence = score"
+    assert "return None, 0" in seg or "return (None, 0" in seg or "return None, 0.0" in seg, \
+        "database_search no-match branch must return (None, 0.0)"
+
+
 def test_register_is_memory_only():
     """register must NOT flush to disk (pitfall #2). Sets _dirty instead."""
     src = _method_src("register")

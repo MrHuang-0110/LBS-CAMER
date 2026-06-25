@@ -283,6 +283,24 @@ def test_face_detect_on_frame_still_supports_k2_register():
     assert "try_register" in src, "on_frame must keep try_register"
 
 
+def test_face_detect_on_frame_confidence_uses_match_score_not_det():
+    """on_frame 置信度必须用 database_search 返回的匹配度 score,不得用 det[4]。
+
+    根因:置信度 = face_reg 特征与 DB 特征的余弦匹配度(需自己算),检测框 det
+    不含匹配度。旧代码 conf = int(det[4]*100) 误用检测框第5元素 → 一直0。
+    database_search 返回 (mid, score),conf = int(score*100)。
+    """
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    # database_search 返回值解包出 score,conf 用 score 算
+    assert "score" in src, "on_frame must unpack score from database_search"
+    assert "score * 100" in src or "score*100" in src, \
+        "conf must be int(score*100) from match score"
+    assert "det[4]" not in src, \
+        "on_frame must NOT use det[4] as confidence (det has no match score)"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
