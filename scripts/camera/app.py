@@ -592,7 +592,7 @@ def _group_photos_by_date(photo_dir):
         if mtime > 0:
             t = time.localtime(mtime)
             date_key = "%04d-%02d-%02d" % (t[0], t[1], t[2])
-            date_label = "%d年%d月%d日" % (t[0], t[1], t[2])
+            date_label = date_key  # 日期标题统一用 - 分隔（如 2026-06-25）
         else:
             date_key = "unknown"
             date_label = "未知日期"

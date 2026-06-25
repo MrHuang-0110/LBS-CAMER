@@ -224,6 +224,22 @@ def test_no_missing_global_decls():
         "missing global declarations (would cause UnboundLocalError): %s" % missing
 
 
+def test_gallery_date_label_uses_dash_not_chinese_units():
+    """图库日期分组标题必须用 '-' 分隔,不得用 '年/月/日'。
+
+    用户要求:日期统一用 - - - 表示(如 2026-06-25),不要 年月日。
+    """
+    src = open(APP_PATH, encoding="utf-8").read()
+    tree = _parse(APP_PATH)
+    fn = _function_node(tree, "_group_photos_by_date")
+    seg = ast.get_source_segment(src, fn) or ""
+    # 旧格式 "%d年%d月%d日" 用 年/月 作单位;新格式用 - 分隔。"未知日期"占位允许。
+    assert "年" not in seg, "date label must not use 年; use '-' separator (e.g. 2026-06-25)"
+    assert "月" not in seg, "date label must not use 月; use '-' separator"
+    assert "%d年" not in src and "月%d日" not in src, \
+        "must not format date as 年/月/日; use '-' separator"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())
