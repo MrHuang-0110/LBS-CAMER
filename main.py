@@ -69,10 +69,19 @@ def _load_script(category_id):
 def run_menu():
     from core.app_runtime import AppRuntime
     from ui.main_menu import MainMenu
+    from ui.boot_splash import BootSplash
 
     fpioa = FPIOA()
     runtime = AppRuntime()
     runtime.init_menu(fpioa)
+
+    # 显式设默认屏幕纯黑背景 + radius0 + border0：消除 LVGL 默认主题四角白点
+    # （BootSplash 原用全屏纯黑 obj 覆盖默认 screen；缺失后默认样式四角露白）。
+    _scr = lv.scr_act()
+    _scr.set_style_bg_color(lv.color_hex(0x000000), 0)
+    _scr.set_style_bg_opa(255, 0)
+    _scr.set_style_border_width(0, 0)
+    _scr.set_style_radius(0, 0)
 
     def on_card_click(category_id):
         print("[CamerAi] launch: %s" % category_id)
@@ -89,7 +98,10 @@ def run_menu():
 
     menu = MainMenu(runtime.config, runtime.buzzer, runtime.lang,
                     on_card_click=on_card_click)
+    # preload_icons 必须在 BootSplash 之前：首次 task_handler 前的文件 I/O 安全窗口
     menu.preload_icons()
+    # 开机 LOGO（BootSplash 内部 open logo 在首次 task_handler 前，安全；阻塞显示后清理）
+    BootSplash(runtime.buzzer).show()
     menu.show()
     print("[CamerAi] main menu running")
     while True:

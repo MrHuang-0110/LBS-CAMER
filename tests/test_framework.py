@@ -61,6 +61,41 @@ def test_main_has_launch_writer():
         "main.py must write .next_script on card click"
 
 
+def test_main_run_menu_shows_boot_splash():
+    """run_menu 必须显示开机 LOGO(BootSplash)。
+
+    根因:reset 框架 run_menu 从未调 BootSplash.show() → 开机无 LOGO。
+    BootSplash 在 menu.preload_icons() 之后(首次 task_handler 前文件 I/O 窗口)、
+    menu.show() 之前调用。
+    """
+    src = open(MAIN_PATH, encoding="utf-8").read()
+    start = src.find("def run_menu(")
+    assert start != -1, "run_menu missing"
+    body = src[start:src.find("\ndef ", start + 1)]
+    assert "BootSplash" in body, "run_menu must show BootSplash (boot LOGO)"
+    assert "preload_icons" in body, "run_menu must preload_icons before splash"
+    # preload_icons 必须在 BootSplash 调用之前(首次 task_handler 前文件 I/O 窗口)
+    # 用 "BootSplash(" 匹配实际调用,排除 "from ... import BootSplash" 行
+    assert body.find("preload_icons") < body.find("BootSplash("), \
+        "preload_icons must run before BootSplash() call (file I/O before first task_handler)"
+
+
+def test_main_run_menu_sets_screen_black_background():
+    """run_menu 必须显式设 lv.scr_act() 纯黑+radius0+border0,消除四角白点。
+
+    根因:LVGL 默认屏幕主题有圆角/边框样式,reset 框架未设背景 → 四角露白点。
+    BootSplash 原用全屏纯黑 obj 覆盖,缺失后默认 screen 直接可见。显式设 scr_act
+    背景对齐 BootSplash/DurUI 做法。
+    """
+    src = open(MAIN_PATH, encoding="utf-8").read()
+    start = src.find("def run_menu(")
+    body = src[start:src.find("\ndef ", start + 1)]
+    assert "scr_act()" in body, "run_menu must get lv.scr_act()"
+    assert "set_style_bg_color" in body, "run_menu must set screen bg color"
+    assert "set_style_radius" in body, "run_menu must set screen radius 0 (kill corner artifacts)"
+    assert "set_style_border_width" in body, "run_menu must set screen border 0"
+
+
 def test_icon_cache_has_preload_back_icon():
     """icon_cache 必须有独立 preload_back_icon() 方法（供 init_app 预读返回钮图标）。
 
