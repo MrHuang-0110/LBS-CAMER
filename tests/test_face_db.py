@@ -78,6 +78,21 @@ def test_face_db_has_init_features_and_get_features():
         assert m in names, "_FaceDB missing method: %s" % m
 
 
+ID_REGISTRY_PATH = os.path.join(ROOT, "core", "id_registry.py")
+
+
+def test_id_registry_has_pending_method():
+    src = open(ID_REGISTRY_PATH, encoding="utf-8").read()
+    assert "def has_pending" in src, "IdRegistry must expose has_pending() for on_frame"
+
+
+def test_id_registry_has_no_long_press_clear():
+    """Clear is overlay-only; IdRegistry must not implement long-press clear."""
+    src = open(ID_REGISTRY_PATH, encoding="utf-8").read()
+    assert "long" not in src.lower() or "long press" not in src.lower(), \
+        "IdRegistry must not implement long-press clear (overlay-only now)"
+
+
 def test_runner():
     failures = 0
     tests = [(name, fn) for name, fn in sorted(globals().items())

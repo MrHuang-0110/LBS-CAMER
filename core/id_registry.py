@@ -1,8 +1,9 @@
-# core/id_registry.py — 可复用注册控制器
+# core/id_registry.py — 可复用注册控制器（单线程）
 #
 # K2 = GPIO0 输入（fpioa.set_function(0, FPIOA.GPIO0)）。
-# 主线程软件边沿检测：按下瞬间置 pending=True（只一次，防按住连触发）。
-# AI 线程每帧调 try_register(feature)：pending(2秒内) → face_db.register
+# 单线程模型：主循环调 poll_k2() 软件边沿检测，按下瞬间置 pending=True
+# （只一次，防按住连触发）。on_frame 调 has_pending() 判定是否消费，
+# 命中则提 feature → try_register(feature)：pending(2秒内) → face_db.register
 # + 蜂鸣 + 清 pending。
 #
 # 不依赖具体 AI 模型：脚本自己提 feature 传入。后续手势/物体脚本复用：
@@ -13,10 +14,11 @@ from machine import Pin, FPIOA
 
 
 class IdRegistry:
-    """可复用注册控制器：K2 按键 + face_db.register 协作。
+    """可复用注册控制器：K2 按键 + face_db.register 协作（单线程）。
 
-    主线程：poll_k2() 边沿检测，按下置 pending（2秒超时）。
-    AI 线程：try_register(feature, buzzer) 消费 pending，调 face_db.register。
+    主循环：poll_k2() 边沿检测，按下置 pending（2秒超时）。
+    on_frame：has_pending() 判定消费时机，try_register(feature, buzzer)
+    消费 pending，调 face_db.register。
 
     不绑定任何 AI 模型——调用方自己提特征传入。
     """
@@ -40,12 +42,24 @@ class IdRegistry:
             self._pending_time = time.ticks_ms()
         self._prev_pressed = pressed
 
+    def has_pending(self):
+        """单线程 on_frame 在提取注册特征前调此判定。返回 True 表示有
+        K2 短按 pending（2 秒超时内）。超时则丢弃 pending 并返回 False。"""
+        if not self._pending:
+            return False
+        if time.ticks_diff(time.ticks_ms(), self._pending_time) > 2000:
+            self._pending = False
+            print("[IdRegistry] pending timeout, discarded")
+            return False
+        return True
+
     def try_register(self, feature, buzzer=None):
-        """AI 线程每帧调。pending(2秒内) → face_db.register + 蜂鸣 + 清 pending。
+        """on_frame 调。pending(2秒内) → face_db.register + 蜂鸣 + 清 pending。
         返回 slot_id(1-4) 或 None（没按/超时/失败）。
 
-        feature：512维 ndarray（由脚本 face_reg.run 提取，不重复 NPU 推理）。
-        buzzer：Buzzer 实例或 None（无 buzzer 时静默，守卫安全）。
+        单线程：on_frame 先 has_pending() 判定，命中再提 feature 传入本方法，
+        避免无 pending 时重复 NPU 推理。feature：512维 ndarray。buzzer：Buzzer
+        实例或 None（无 buzzer 时静默，守卫安全）。
         """
         if not self._pending:
             return None
