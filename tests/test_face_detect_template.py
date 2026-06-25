@@ -65,13 +65,6 @@ def test_face_detect_has_no_threads_or_self_media_init():
     assert not found, "Phase 1 template app must not self-init media or start threads: %s" % found
 
 
-def test_face_detect_phase1_excludes_registration_and_db():
-    src = _src()
-    forbidden = ["face_db", "id_registry", "database_search", "FaceRegistrationApp"]
-    found = [token for token in forbidden if token in src]
-    assert not found, "Phase 1 must not include registration/DB/recognition: %s" % found
-
-
 def test_run_uses_chn0_preview_and_task_handler():
     tree = _parse()
     run_fn = _function_node(tree, "run")
@@ -141,6 +134,80 @@ def test_template_ui_helpers_exist():
     src = _src()
     assert "人脸检测" in src, "title should be 人脸检测"
     assert "set_style_bg_opa(0" in src, "screen/preview must be transparent for OSD1"
+
+
+def test_face_detect_imports_recognition_assets():
+    src = _src()
+    assert "FaceRegistrationApp" in src, "must import FaceRegistrationApp"
+    assert "face_db" in src, "must use face_db"
+    assert "id_registry" in src, "must use id_registry"
+    assert "database_search" in src, "must use database_search"
+
+
+def test_run_loads_face_reg_kmodel_before_loop():
+    tree = _parse()
+    run_fn = _function_node(tree, "run")
+    src = ast.get_source_segment(_src(), run_fn) or ""
+    assert "face_recognition_mobile.kmodel" in src, "run() must load mobile reg kmodel"
+    assert "FaceRegistrationApp(" in src, "run() must construct FaceRegistrationApp"
+    assert src.find("FaceRegistrationApp(") < src.find("while not exit_flag"), \
+        "face_reg must be constructed before the main loop (pitfall #18)"
+
+
+def test_run_main_loop_polls_k2():
+    tree = _parse()
+    run_fn = _function_node(tree, "run")
+    src = ast.get_source_segment(_src(), run_fn) or ""
+    assert "poll_k2()" in src, "main loop must call id_registry.poll_k2()"
+
+
+def test_on_frame_recognizes_largest_face():
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    assert "database_search" in src, "on_frame must match largest face via database_search"
+    assert "face_reg.run" in src or "face_reg" in src, "on_frame must extract feature via face_reg"
+
+
+def test_on_frame_no_runtime_disk_io():
+    tree = _parse()
+    fn = _function_node(tree, "on_frame")
+    src = ast.get_source_segment(_src(), fn) or ""
+    for token in ("flush_to_disk", "os.remove", "open("):
+        assert token not in src, "on_frame must not do disk I/O (pitfall #2): %s" % token
+
+
+def test_run_persists_at_exit():
+    tree = _parse()
+    run_fn = _function_node(tree, "run")
+    src = ast.get_source_segment(_src(), run_fn) or ""
+    assert "flush_to_disk" in src or "face_db.flush_to_disk" in src, \
+        "run() exit must persist face_db (flush or clear)"
+
+
+def test_overlay_close_is_deferred():
+    """Clear/Save button callbacks must not delete overlay (use-after-free)."""
+    src = _src()
+    assert "_process_overlay_close" in src, "must have deferred overlay-close handler"
+    assert "_close_overlay" in src, "must use a close flag, not direct delete in callback"
+
+
+def test_clear_save_callbacks_no_disk_io():
+    src = _src()
+    # The clear handler must set clear_dirty + flag, not os.remove directly.
+    assert "face_db.clear()" in src or ".clear()" in src, "clear button must call face_db.clear()"
+    assert "os.remove" not in src, "app.py must not call os.remove directly (deferred to face_db)"
+
+
+def test_bottom_bar_has_list_icon_and_overlay():
+    src = _src()
+    assert "list" in src, "bottom bar must have list icon trigger"
+    assert "清除" in src and "保存" in src, "overlay must have Clear/Save buttons"
+
+
+def test_title_is_recognition():
+    src = _src()
+    assert "人脸识别" in src, "title should be 人脸识别"
 
 
 def test_runner():
