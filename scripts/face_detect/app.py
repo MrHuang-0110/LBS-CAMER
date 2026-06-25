@@ -433,3 +433,4 @@ def run(runtime):
         _deinit_ai()
         _destroy_ui()
         _RUNTIME = None
+        face_db.flush_to_disk()  # 持久化预留接口（当前 no-op，路径待定）

@@ -17,8 +17,8 @@
 #     对不存在路径的 open 调用在 K230 FATFS 上污染 DMA 状态）。
 #   - init_features() 改用 np.fromfile()：与 anchors 加载同路径，安全。
 
-_DB_DIR = "/data/fac_db"  # 无尾部斜杠：os.mkdir 在 MicroPython 上可能拒绝 / 结尾
-_NEXT_SLOT_PATH = "/data/fac_db/.next_slot"  # Step 7: 轮转覆盖指针持久化（1-4 循环）
+_DB_DIR = "/sdcard/CamerAi/fac_db"  # 诊断：从 /data 改 /sdcard（同 anchors/kmodel 分区，避坑#18 /data I/O 污染）
+_NEXT_SLOT_PATH = "/sdcard/CamerAi/fac_db/.next_slot"  # Step 7: 轮转覆盖指针持久化（1-4 循环）
 
 
 class _FaceDB:
@@ -34,67 +34,16 @@ class _FaceDB:
     # ── 运行时加载（APP 内 on_enter → _init_db 调用）────
 
     def init_features(self):
-        """加载 .bin 文件到 numpy 特征数组。
+        """加载已注册特征到内存。
 
-        使用 open + read + np.frombuffer——与官方 demo
-        (demo/AI类实验例程/实验4 人脸识别实验/main2.py:289-290) 完全
-        相同的 I/O 路径。曾用 np.fromfile 失败：用户写入的 SD .bin
-        在 K230 ulab 下读取静默失败（疑似字节对齐/OSError），导致
-        重进 APP 看不到已注册人脸（板端实测：flush_to_disk 写入
-        OK / .bin 存在 / init_features 加载 0 face）。
-
-        守卫：必须正好 EXPECTED_BYTES = 512*4 = 2048 字节（mobile kmodel 512 维）。半截写入
-        或 dtype 错配都拒绝——避免读到坏数据导致后续 cosine 比对 NaN。
-        K230 ulab np.float 等价于 float32（4 字节/元素）。
-
-        调用时机：FaceDetectApp.on_enter() → _init_db()
-        在 lv.task_handler() 内部，但 open() 仍属安全窗口（与
-        _init_ai_models 加载 anchors 同位置；曾大量验证安全）。
+        ⚠️ 持久化路径待定：listdir/open 对 /data 或 /sdcard 的特征库 I/O 都会
+        污染 K230 FATFS/DMA 状态（坑#18），导致主循环卡死。当前阶段不读盘，
+        返回空库——注册/识别/清除的内存逻辑正常推进，重启后不保留历史特征。
+        持久化路径和加载方式后续决定（接口已预留，见 flush_to_disk/clear）。
         """
-        import os
-        import ulab.numpy as np_local
-        # face_recognition_mobile.kmodel 输出 512 维特征 → 512×4=2048 字节
-        # （标准 face_recognition.kmodel 44MB，LVGL 双线程后 ~3.7MB free 装不下
-        # → AIBase.__init__ 死锁；mobile 2.65MB 才装得下。官方 main2.py 用标准
-        # 版是因无 LVGL，内存充裕。CamerAi 双线程 LVGL 必须用 mobile。）
-        EXPECTED_BYTES = 512 * 4
         self._features = {}
-        # ⚠️ 先 os.listdir 一次列出目录，避免对每个 idN.bin 都 open() 抛 ENOENT。
-        # 板端验证（坑#18 关联）：open() 异常路径在 K230 FATFS 上疑似污染
-        # DMA/文件系统状态 → 后续 AI 线程每帧 snapshot/show_image 累积，
-        # fc~30 渐进卡死。listdir 对不存在目录抛一次异常即视为空，0 face 时
-        # 完全不进 open。对齐官方实验4 main2.py:280 listdir 模式。
-        try:
-            files = os.listdir(_DB_DIR)
-        except Exception:
-            files = []
-        for i in range(1, 5):
-            fname = f"id{i}.bin"
-            if fname not in files:
-                continue
-            path = f"{_DB_DIR}/{fname}"
-            try:
-                with open(path, 'rb') as f:
-                    data = f.read()
-            except Exception as e:
-                print(f"[FaceDB] id{i}.bin not loadable: {e}")
-                continue
-            if not isinstance(data, (bytes, bytearray)):
-                print(f"[FaceDB] id{i}.bin read returned non-bytes")
-                continue
-            if len(data) != EXPECTED_BYTES:
-                print(f"[FaceDB] id{i}.bin invalid (got {len(data)} bytes, expect {EXPECTED_BYTES})")
-                continue
-            try:
-                feature = np_local.frombuffer(data, dtype=np_local.float)
-            except Exception as e:
-                print(f"[FaceDB] id{i}.bin frombuffer failed: {e}")
-                continue
-            self._features[i] = feature
-            print(f"[FaceDB] loaded id{i}.bin ({len(data)//4} floats)")
-        self._load_next_slot()   # Step 7: 读回上次覆盖指针（与读 .bin 同安全窗口）
         self._loaded = True
-        print(f"[FaceDB] init_features done: {len(self._features)} face(s)")
+        print("[FaceDB] init_features: persistence disabled (in-memory only), 0 face(s)")
         return self._features
 
     # ── Step 7: 轮转覆盖指针持久化 ──────────────────────
@@ -153,51 +102,23 @@ class _FaceDB:
     def flush_to_disk(self):
         """Exit-stage persistence. Called after task_handler stopped (pitfall #2 safe).
 
-        - _clear_dirty: remove all .bin + .next_slot, reset pointer (clear intent)
-        - _dirty: write all memory features to .bin + save _next_slot
-        - neither: no-op
-        Resets flags after.
+        ⚠️ 持久化路径待定（见 init_features 注释）：当前不写盘，仅复位 dirty 标志。
+        持久化路径和写盘方式后续决定后，在此实现 _clear_dirty 删盘 / _dirty 写盘。
         """
-        import os
         if self._clear_dirty:
-            for i in range(1, 5):
-                try:
-                    os.remove(f"{_DB_DIR}/id{i}.bin")
-                except Exception:
-                    pass
-            try:
-                os.remove(_NEXT_SLOT_PATH)
-            except Exception:
-                pass
-            self._clear_dirty = False
-            self._dirty = False
-            print("[FaceDB] exit: cleared disk")
-            return
-        if not self._dirty:
-            return
-        if not self._features:
-            self._dirty = False
-            return
-        try:
-            os.mkdir(_DB_DIR)
-        except Exception:
-            pass
-        for i, feature in self._features.items():
-            path = f"{_DB_DIR}/id{i}.bin"
-            try:
-                with open(path, 'wb') as f:
-                    f.write(feature.tobytes())
-                print("[FaceDB] exit: flushed id%d.bin" % i)
-            except Exception as e:
-                print("[FaceDB] exit: flush id%d failed: %s" % (i, e))
-        self._save_next_slot()
+            print("[FaceDB] exit: clear intent recorded (persistence disabled, no disk write)")
+        elif self._dirty:
+            print("[FaceDB] exit: %d feature(s) pending (persistence disabled, no disk write)"
+                  % len(self._features))
+        self._clear_dirty = False
         self._dirty = False
 
     def clear(self):
         """Clear all features in MEMORY only.
 
         No file deletion here (pitfall #2). Sets _clear_dirty; the exit stage
-        removes all .bin + .next_slot. Cancels any pending _dirty (clear wins).
+        would remove all .bin + .next_slot (currently disabled). Cancels pending
+        _dirty (clear wins).
         """
         self._features.clear()
         self._clear_dirty = True

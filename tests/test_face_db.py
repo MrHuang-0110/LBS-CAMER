@@ -62,12 +62,20 @@ def test_clear_is_memory_only():
     assert "_clear_dirty" in src, "clear must set _clear_dirty flag"
 
 
-def test_flush_to_disk_handles_clear_dirty_and_dirty():
+def test_flush_to_disk_is_noop_and_resets_flags():
+    """flush_to_disk 当前为 no-op（持久化路径待定，用户决定先不保存）。
+
+    守护：(1) 仍是 exit-stage 入口，复位 _clear_dirty/_dirty 标志；
+          (2) 不做盘 I/O（坑#2：runtime SD 写与 display DMA flush 死锁），
+              无 os.remove/open/write——恢复持久化时再在此实现。
+    """
     src = _method_src("flush_to_disk")
-    assert "_clear_dirty" in src, "flush_to_disk must handle _clear_dirty (remove all)"
-    assert "_dirty" in src, "flush_to_disk must handle _dirty (write)"
-    assert "os.remove" in src or "clear_disk" in src, \
-        "flush_to_disk must remove .bin when _clear_dirty"
+    assert "_clear_dirty" in src, "flush_to_disk must reset _clear_dirty flag"
+    assert "_dirty" in src, "flush_to_disk must reset _dirty flag"
+    assert "os.remove" not in src, \
+        "flush_to_disk must not os.remove (persistence disabled, pitfall #2)"
+    assert "open(" not in src, \
+        "flush_to_disk must not open files (persistence disabled, pitfall #2)"
 
 
 def test_face_db_has_init_features_and_get_features():
