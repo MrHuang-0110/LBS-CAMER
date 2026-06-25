@@ -47,6 +47,26 @@ def test_send_id_data_exists_with_slots_param():
     assert "slots" in args, "send_id_data must take slots"
 
 
+def test_send_id_data_uses_big_endian_for_coords():
+    """x/y/w/h 必须**大端**打包(高字节在前),对齐主机 _camer_cam_data 解析。
+
+    主机: (data[off+1]<<8)|data[off+2] → 大端,高字节在 off+1。
+    旧代码小端(低字节在 off+1) → x=320(0x0140) 发 40 01,主机解析成 0x4001=16385
+    → "坐标值很大"。改大端:发 01 40,主机解析 0x0140=320。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "send_id_data")
+    seg = ast.get_source_segment(src, m) or ""
+    # 大端:高字节 (x>>8) 在前(off+1),低字节 x 在后(off+2)
+    assert "(x >> 8) & 0xFF" in seg and "buf[off + 1]" in seg, \
+        "x must pack big-endian: high byte (x>>8) at off+1, low byte at off+2"
+    # 不得小端:低字节 x 在 off+1
+    assert "buf[off + 1] = x & 0xFF" not in seg, \
+        "must NOT pack little-endian (x&0xFF at off+1); host parses big-endian"
+
+
 def test_tick_exists_and_calls_poll_and_send():
     """tick(category_id, slots=None): poll_handshake + send_id_data。"""
     src = _src()

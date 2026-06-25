@@ -116,8 +116,10 @@ class HostAPI:
             msg_type: 类型码 (int, 1字节)
             slots: list[4]，每元素 None 或 (id,x,y,w,h,conf)。
                    None / 越界 → 该组全0。
-                   每组 10 字节: id(1B) + x(2B LE) + y(2B LE)
-                                + w(2B LE) + h(2B LE) + conf(1B)
+                   每组 10 字节: id(1B) + x(2B BE) + y(2B BE)
+                                + w(2B BE) + h(2B BE) + conf(1B)
+                   ⚠️ 大端(BE):对齐主机 _camer_cam_data 大端解析
+                   (data[off+1]<<8)|data[off+2]。小端会致坐标值错乱。
                    总计 40 字节数据载荷。
         """
         buf = bytearray(40)
@@ -127,14 +129,14 @@ class HostAPI:
             if slot is not None:
                 fid, x, y, w, h, conf = slot
                 buf[off]     = fid & 0xFF
-                buf[off + 1] = x & 0xFF
-                buf[off + 2] = (x >> 8) & 0xFF
-                buf[off + 3] = y & 0xFF
-                buf[off + 4] = (y >> 8) & 0xFF
-                buf[off + 5] = w & 0xFF
-                buf[off + 6] = (w >> 8) & 0xFF
-                buf[off + 7] = h & 0xFF
-                buf[off + 8] = (h >> 8) & 0xFF
+                buf[off + 1] = (x >> 8) & 0xFF  # 大端:高字节在前
+                buf[off + 2] = x & 0xFF
+                buf[off + 3] = (y >> 8) & 0xFF
+                buf[off + 4] = y & 0xFF
+                buf[off + 5] = (w >> 8) & 0xFF
+                buf[off + 6] = w & 0xFF
+                buf[off + 7] = (h >> 8) & 0xFF
+                buf[off + 8] = h & 0xFF
                 buf[off + 9] = conf & 0xFF
             # else: 保持 0（未使用槽位全0）
         self.send_frame(msg_type, bytes(buf))
