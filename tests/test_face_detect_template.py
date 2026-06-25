@@ -132,7 +132,7 @@ def test_template_ui_helpers_exist():
     for name in ("_build_ui", "_destroy_ui"):
         assert name in funcs, "template UI helper missing: %s" % name
     src = _src()
-    assert "人脸识别" in src, "title should be 人脸识别"
+    assert "category.face_detect" in src, "title must use lang.t('category.face_detect')"
     assert "set_style_bg_opa(0" in src, "screen/preview must be transparent for OSD1"
 
 
@@ -240,8 +240,30 @@ def test_bottom_bar_has_list_icon_and_overlay():
 
 
 def test_title_is_recognition():
+    """标题用 i18n(category.face_detect),跟随语言切换,不硬编码中文。
+
+    旧:TITLE_TEXT="人脸识别" 硬编码 → settings 切语言后 face_detect 标题不变。
+    新:_build_ui 用 runtime.lang.t("category.face_detect")。
+    """
     src = _src()
-    assert "人脸识别" in src, "title should be 人脸识别"
+    assert 'lang.t("category.face_detect")' in src or "lang.t('category.face_detect')" in src, \
+        "title must use runtime.lang.t('category.face_detect') for i18n, not hardcoded"
+    # 不得硬编码标题字符串字面量(TITLE_TEXT 常量赋值中文)
+    assert 'TITLE_TEXT = "人脸识别"' not in src and "TITLE_TEXT = '人脸识别'" not in src, \
+        "must not hardcode TITLE_TEXT as Chinese string; use lang.t"
+
+
+def test_face_detect_back_icon_uses_face_icon_set():
+    """顶栏返回图标用 face_detect_icon/back.png(get_face_icon('back')),
+    不用 settings 的 get_back_icon()。
+
+    用户要求 face_detect 返回图标用 face_detect_icon/back.png。
+    """
+    src = _src()
+    assert 'get_face_icon("back")' in src or "get_face_icon('back')" in src, \
+        "top bar back icon must use icon_cache.get_face_icon('back') (face_detect_icon/back.png)"
+    assert "get_back_icon()" not in src, \
+        "face_detect must not use get_back_icon() (settings icon); use get_face_icon('back')"
 
 
 def test_face_detect_on_frame_recognizes_all_faces():

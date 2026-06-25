@@ -21,7 +21,6 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
-TITLE_TEXT = "人脸识别"
 
 _RUNTIME = None
 _screen = None
@@ -287,7 +286,7 @@ def _build_ui(runtime, exit_flag):
     btn.clear_flag(lv.obj.FLAG.SCROLLABLE)
     btn.add_flag(lv.obj.FLAG.CLICKABLE)
 
-    icon_data, icon_dsc = icon_cache.get_back_icon()
+    icon_data, icon_dsc = icon_cache.get_face_icon("back")
     if icon_dsc is not None and icon_data is not None:
         import struct
         w = h = 64
@@ -312,7 +311,7 @@ def _build_ui(runtime, exit_flag):
     btn.add_event(_on_back, lv.EVENT.CLICKED, None)
 
     title = lv.label(_top_bar)
-    title.set_text(TITLE_TEXT)
+    title.set_text(runtime.lang.t("category.face_detect"))
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)

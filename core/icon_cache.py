@@ -101,6 +101,7 @@ class _IconCache:
         base = "/sdcard/CamerAi/resource/icons/face_detect_icon/"
         icons = {
             "list": base + "list.png",
+            "back": base + "back.png",
         }
         for name, path in icons.items():
             try:

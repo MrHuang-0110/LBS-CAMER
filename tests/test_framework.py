@@ -73,6 +73,20 @@ def test_icon_cache_has_preload_back_icon():
         "icon_cache must have standalone preload_back_icon() method"
 
 
+def test_icon_cache_preloads_face_back_icon():
+    """preload_face_icons 必须预读 'back'(face_detect_icon/back.png)。
+
+    face_detect 顶栏返回图标用 face_detect_icon/back.png(用户要求),不走
+    settings 的 get_back_icon()。需在 preload_face_icons 里预读 back。
+    """
+    src = open(ICON_CACHE_PATH, encoding="utf-8").read()
+    start = src.find("def preload_face_icons(")
+    assert start != -1, "preload_face_icons missing"
+    body = src[start:src.find("def ", start + 1)]
+    assert '"back"' in body or "'back'" in body, \
+        "preload_face_icons must preload 'back' icon (face_detect_icon/back.png)"
+
+
 def test_init_app_preloads_back_icon():
     """init_app 必须调 preload_back_icon()（脚本顶栏返回钮需要图标）。"""
     src = open(RUNTIME_PATH, encoding="utf-8").read()
