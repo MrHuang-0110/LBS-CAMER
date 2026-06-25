@@ -101,21 +101,58 @@ def test_handshake_reply_payload_matches_host_expectation():
         "HANDSHAKE_REPLY_PAYLOAD must be 'Play Aplication' (host expects this exact spelling)"
 
 
-def test_poll_handshake_short_circuits_when_connected():
-    """握手成功后(_connected=True) poll_handshake 必须立即返回不再应答。
+def test_poll_handshake_matches_full_request_frame_not_substring():
+    """poll_handshake 必须按完整握手请求帧匹配,不得用子串 magic 触发应答。
 
-    根因:协议规定握手成功后主机不再发握手帧,摄像头只发数据帧。原实现每帧
-    读到 UART 缓冲区残留/重发的握手字节就重新应答 → 上位机收到一堆应答帧
-    混在数据帧里。_connected 标志须在 poll_handshake 入口短路。
+    根因:主机超时检测的是"有没有收到数据帧"。摄像头持续发数据帧则主机不重发
+    握手;仅进程重启/断连间隙主机才重发完整握手请求帧。摄像头须按完整帧
+    (0x5A 对齐 + 完整请求帧字节)匹配才应答,避免缓冲区残留字节误触发重复应答。
+    参考 DurUI._usart1_try_handshake:0x5A 对齐 + 完整 START_FRAME 匹配。
     """
     src = _src()
     tree = ast.parse(src, filename=HOST_API_PATH)
     cls = _class_node(tree, "HostAPI")
     m = _method_node(cls, "poll_handshake")
     seg = ast.get_source_segment(src, m) or ""
-    # 入口短路:if self._connected: return(在读 UART 之前)。排除 except 里的赋值。
-    assert "if self._connected" in seg, \
-        "poll_handshake must short-circuit at entry when already connected (if self._connected: return)"
+    # 必须有完整请求帧常量(或其字节序列)的匹配,不是子串 'Please Link'
+    assert "HANDSHAKE_REQUEST_FRAME" in src or "REQUEST_FRAME" in src, \
+        "must define a full handshake request frame constant (HANDSHAKE_REQUEST_FRAME)"
+    assert "in raw" not in seg and "in self._rx_buf" not in seg, \
+        "poll_handshake must not use substring 'in raw' matching; match full frame on 0x5A boundary"
+
+
+def test_poll_handshake_does_not_short_circuit_on_connected():
+    """poll_handshake 不得在入口用 _connected 短路。
+
+    主机超时(没收到数据帧)后会重发握手请求,摄像头新进程/断连后必须能重新
+    应答。入口短路会阻止重新应答 → 切换脚本后连不上。_connected 仅作状态
+    标记,不阻断握手检测。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "poll_handshake")
+    seg = ast.get_source_segment(src, m) or ""
+    # 不得有 "if self._connected: ... return" 入口短路(except 内是赋值 self._connected=False,不是 if 判断)
+    assert "if self._connected" not in seg, \
+        "poll_handshake must NOT short-circuit with 'if self._connected' (host re-handshakes on timeout after data-frame gap)"
+
+
+def test_tick_has_handshake_cooldown_before_sending_data():
+    """tick 必须有握手应答后 100ms 起步延迟:静默期内跳过 send_id_data。
+
+    协议:握手应答后间隔 100ms 才开始上传数据帧。tick 用时间戳检查距上次
+    握手应答不足 100ms 则跳过发送(只 poll_handshake),100ms 后恢复每帧发。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "tick")
+    seg = ast.get_source_segment(src, m) or ""
+    assert "100" in seg or "HANDSHAKE_COOLDOWN" in src or "cooldown" in seg.lower(), \
+        "tick must enforce ~100ms cooldown after handshake reply before sending data"
+    assert "ticks_ms" in seg or "ticks_diff" in seg, \
+        "tick must use time.ticks_ms/ticks_diff for the cooldown check"
 
 
 def test_runner():

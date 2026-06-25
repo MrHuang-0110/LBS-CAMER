@@ -49,7 +49,11 @@ class HostAPI:
     # 握手相关
     HANDSHAKE_CMD = 0x09
     HANDSHAKE_REPLY_PAYLOAD = b"Play Aplication"  # 对齐主机硬匹配(文档拼写,缺一个p)
-    HANDSHAKE_REQUEST_MAGIC = b"Please Link"
+    # 主机握手请求完整帧(参考 DurUI.USART1_START_FRAME):0x5A 对齐匹配,不用子串。
+    # 帧尾 A5 A5(两个)。源97/目98 是主机侧地址,主机 dataAgreeAnalys 不校验地址。
+    HANDSHAKE_REQUEST_FRAME = b"\x5A\x97\x98\x0B\x09Please Link\xA5\xA5"
+    # 握手应答后静默期:应答后等 100ms 才开始发数据帧(用户确认)。
+    HANDSHAKE_COOLDOWN_MS = 100
 
     def __init__(self):
         # UART1: TX=GPIO40, RX=GPIO41（FPIOA 由 main.py 配置）
@@ -58,7 +62,8 @@ class HostAPI:
                           bits=UART.EIGHTBITS, parity=UART.PARITY_NONE,
                           stop=UART.STOPBITS_ONE)
         self._connected = False
-        self._rx_buf = bytearray(256)
+        self._rx_buf = bytearray()
+        self._last_handshake_ms = 0  # 上次应答握手的时间戳(0=从未应答)
         self._handlers = {}
 
     # ── 公开属性 ──
@@ -142,21 +147,25 @@ class HostAPI:
             slots: list[4] 或 None。None → 4组全0（主菜单/相机/settings）。
         """
         self.poll_handshake()
+        # 握手应答后 100ms 静默期:不足 100ms 跳过数据帧发送(用户确认)。
+        # 主机超时检测的是"有没有收到数据帧";持续发数据帧则主机不重发握手。
+        if self._last_handshake_ms != 0:
+            import time as _time
+            if _time.ticks_diff(_time.ticks_ms(), self._last_handshake_ms) < self.HANDSHAKE_COOLDOWN_MS:
+                return
         msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
         self.send_id_data(msg_type, slots)
 
     # ── 握手状态机 ──
 
     def poll_handshake(self):
-        """非阻塞握手检测：检查UART接收缓冲区，匹配握手帧→自动应答。
+        """非阻塞握手检测：按完整握手请求帧匹配→自动应答。
 
-        应在每帧由 tick() 调用。
-        检测到主机握手请求(含 'Please Link' 的 0x09 命令帧)后自动应答。
-        握手成功后(_connected=True)短路:协议规定主机不再发握手帧,
-        此后只发数据帧;避免对缓冲区残留/重发字节重复应答。
+        应在每帧由 tick() 调用。在 0x5A 对齐边界上匹配完整
+        HANDSHAKE_REQUEST_FRAME(参考 DurUI._usart1_try_handshake),不用子串。
+        主机超时(没收到数据帧)后会重发握手请求 → 重新应答 + 重置 100ms 计时,
+        故入口不短路(_connected 仅作状态标记)。
         """
-        if self._connected:
-            return
         try:
             n = self._uart.any()
         except Exception:
@@ -166,8 +175,6 @@ class HostAPI:
         if n == 0:
             return
 
-        if n > len(self._rx_buf):
-            n = len(self._rx_buf)
         try:
             raw = self._uart.read(n)
         except Exception:
@@ -176,22 +183,42 @@ class HostAPI:
         if raw is None:
             return
 
-        magic = self.HANDSHAKE_REQUEST_MAGIC
-        if magic in raw:
-            self._send_handshake_reply()
+        self._rx_buf.extend(raw)
+        # 缓冲区超长只保留尾部(丢老数据,保留最近的帧边界)
+        if len(self._rx_buf) > 256:
+            self._rx_buf = self._rx_buf[-256:]
+
+        frame = self.HANDSHAKE_REQUEST_FRAME
+        flen = len(frame)
+        buf = self._rx_buf
+        nbuf = len(buf)
+        i = 0
+        matched_at = -1
+        while i <= nbuf - flen:
+            if buf[i] == self.FRAME_HEAD and buf[i:i + flen] == frame:
+                matched_at = i
+                break
+            i += 1
+
+        if matched_at < 0:
+            # 未匹配:保留从最后一个 0x5A 开始的尾部(可能是半帧,等下次拼)
+            last_head = buf.rfind(self.FRAME_HEAD)
+            if last_head > 0:
+                self._rx_buf = bytearray(buf[last_head:])
+            else:
+                self._rx_buf = bytearray()
             return
 
-        # 也检查 0x09 命令码后跟 magic 的情况（标准帧格式）
-        for i in range(len(raw) - len(magic) - 1):
-            if raw[i] == 0x09:
-                if raw[i + 1:i + 1 + len(magic)] == magic:
-                    self._send_handshake_reply()
-                    return
+        # 匹配:应答 + 记时间戳 + 消费掉匹配帧及之前的字节
+        self._send_handshake_reply()
+        self._rx_buf = bytearray(buf[matched_at + flen:])
 
     def _send_handshake_reply(self):
-        """发送握手应答帧"""
+        """发送握手应答帧 + 记录应答时间戳(100ms 静默期起点)"""
+        import time as _time
         self.send_frame(self.HANDSHAKE_CMD, self.HANDSHAKE_REPLY_PAYLOAD)
         self._connected = True
+        self._last_handshake_ms = _time.ticks_ms()
         print("[HostAPI] handshake reply sent — connected")
 
     # ── 命令注册（预留）──
