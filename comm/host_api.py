@@ -48,7 +48,7 @@ class HostAPI:
 
     # 握手相关
     HANDSHAKE_CMD = 0x09
-    HANDSHAKE_REPLY_PAYLOAD = b"Play Application"
+    HANDSHAKE_REPLY_PAYLOAD = b"Play Aplication"  # 对齐主机硬匹配(文档拼写,缺一个p)
     HANDSHAKE_REQUEST_MAGIC = b"Please Link"
 
     def __init__(self):
@@ -85,7 +85,7 @@ class HostAPI:
             payload: 负载数据 (bytes)
         """
         inner = bytearray([msg_type]) + bytes(payload)
-        length = len(inner)
+        length = len(payload)  # 主机 dataAgreeAnalys: data[3]=length 只算 payload,type 在 data[4] 不计入
         header = bytearray([self.FRAME_HEAD, self.SRC_ADDR,
                             self.DST_ADDR, length])
         chk = self._checksum(header + inner)

@@ -71,6 +71,36 @@ def test_send_face_data_delegates_to_send_id_data():
     assert "send_id_data" in seg, "send_face_data must delegate to send_id_data"
 
 
+def test_send_frame_length_excludes_type_byte():
+    """length 字段必须只算 payload,不含 type(对齐主机 dataAgreeAnalys 解析)。
+
+    主机:data[3]=length, data[4]=index(type), memcpy(data+5, data[3])。
+    即 length = payload 字节数, type 在 data[4] 不计入 length。
+    旧代码 length = 1(type) + len(payload) 多算1字节 → 帧尾错位 → 主机
+    AGREE_MEN_ERROR 丢弃 → 设备识别失败。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "send_frame")
+    seg = ast.get_source_segment(src, m) or ""
+    # length 必须等于 len(payload),不得 +1 含 type
+    assert "len(payload)" in seg, "length must be len(payload)"
+    assert "len(inner)" not in seg, \
+        "length must NOT be len(inner) (inner includes type byte)"
+
+
+def test_handshake_reply_payload_matches_host_expectation():
+    """握手应答 payload 必须是 'Play Aplication'(15字符,对齐主机硬匹配)。
+
+    主机按文档拼写错误 'Play Aplication' 匹配(用户确认)。代码原用正确拼写
+    'Play Application'(17字符) → 主机不认 → 握手失败。
+    """
+    src = _src()
+    assert b"Play Aplication" in src.encode() or "Play Aplication" in src, \
+        "HANDSHAKE_REPLY_PAYLOAD must be 'Play Aplication' (host expects this exact spelling)"
+
+
 def test_poll_handshake_short_circuits_when_connected():
     """握手成功后(_connected=True) poll_handshake 必须立即返回不再应答。
 
