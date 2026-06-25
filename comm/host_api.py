@@ -150,9 +150,13 @@ class HostAPI:
     def poll_handshake(self):
         """非阻塞握手检测：检查UART接收缓冲区，匹配握手帧→自动应答。
 
-        应在每帧由 ScriptRunner.tick() 调用。
+        应在每帧由 tick() 调用。
         检测到主机握手请求(含 'Please Link' 的 0x09 命令帧)后自动应答。
+        握手成功后(_connected=True)短路:协议规定主机不再发握手帧,
+        此后只发数据帧;避免对缓冲区残留/重发字节重复应答。
         """
+        if self._connected:
+            return
         try:
             n = self._uart.any()
         except Exception:

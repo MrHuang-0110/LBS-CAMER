@@ -71,6 +71,23 @@ def test_send_face_data_delegates_to_send_id_data():
     assert "send_id_data" in seg, "send_face_data must delegate to send_id_data"
 
 
+def test_poll_handshake_short_circuits_when_connected():
+    """握手成功后(_connected=True) poll_handshake 必须立即返回不再应答。
+
+    根因:协议规定握手成功后主机不再发握手帧,摄像头只发数据帧。原实现每帧
+    读到 UART 缓冲区残留/重发的握手字节就重新应答 → 上位机收到一堆应答帧
+    混在数据帧里。_connected 标志须在 poll_handshake 入口短路。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "poll_handshake")
+    seg = ast.get_source_segment(src, m) or ""
+    # 入口短路:if self._connected: return(在读 UART 之前)。排除 except 里的赋值。
+    assert "if self._connected" in seg, \
+        "poll_handshake must short-circuit at entry when already connected (if self._connected: return)"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):
