@@ -29,14 +29,21 @@
 ### face_detect 4组数据语义（用户确认：4个DB槽位）
 
 - 4组**固定对应 DB 槽位 1-4**（即 `_db_features` 的 slot_id）
-- 当前帧匹配到某注册 ID → 该 slot 对应组填 `(id, x, y, w, h, conf)`；未匹配到的槽位填全0
-- 当前帧无匹配 → 4组全0
+- 当前帧某注册 ID 对应的人在画面里并被识别匹配 → 该 slot 对应组填 `(id, x, y, w, h, conf)`；不在画面/未匹配的槽位填全0
+- 多人同画面：各自匹配到的槽位同时填值（如张三+李四同画面 → slot1、slot2 同时填值，slot3/4 全0）
+- 当前帧无任何匹配 → 4组全0
 
-### 识别范围（用户确认：只识最大脸）
+### 识别范围（用户确认：识全部脸）
 
-- 每帧只对最大那张脸跑 `face_reg` kmodel（维持现状，NPU 负担不变，稳定）
-- 推论：4槽位里**最多1个有值**（最大脸匹配到的那一个 DB 槽位），其余3个全0
-- 框数据来源：`face_det.draw_result` 用的 display 坐标框（rgb888p→display 已缩放）
+- 每帧对**每个检测到的人脸框**都跑 `face_reg` kmodel（不再只取最大脸）
+- 每个 reg 结果 `database_search` 匹配 DB：匹配到 slot_id → 填该 slot；无匹配 → 不填
+- 槽位填充：`slots[mid-1] = (mid, x, y, w, h, conf)`（mid 是匹配的 DB slot 1-4）
+- 框数据来源：display 坐标框（rgb888p→display 已缩放，与 `draw_result` 一致）
+
+⚠️ **NPU 风险（坑#16）**：一帧多次 reg 推理累积 AI2D native buffer，可能丢帧/卡死。
+旧调试备份 `app_full_debug_backup.py` 的多脸 reg 循环是**死代码**（`_ai_loop` 实际只检测不识别，
+`_send_recognition_data` 被 `return` 关闭），**无板端验证先例**。本次为首次板端验证多脸 reg，
+计划中列为重点验证项；如板端卡死，降级方案 = 每 N 帧跑一次全脸识别（降频），不在首次实现内。
 
 ### 发送节奏（用户确认：每帧都发）
 
@@ -108,40 +115,69 @@ def host_tick(self, slots=None):
 | `scripts/settings/app.py:run` 循环 | `runtime.host_tick()` |
 | `scripts/face_detect/app.py:on_frame` | 算完识别结果后建4槽位 list → `_RUNTIME.host_tick(slots)` |
 
-### 4. face_detect 槽位构建（on_frame 内）
+### 4. face_detect on_frame 改造（识全部脸 + 槽位构建）
 
+现状 `on_frame` 只对最大脸跑 reg。改为对每个检测框跑 reg，匹配后填对应槽位。
 `draw_result` 后、`gc.collect` 前：
 
 ```python
-# 构建4槽位推送数据（4组对应 DB slot 1-4）
+# 识全部脸：对每个检测框跑 reg + 匹配，构建4槽位推送数据
+recognition_results = []
 slots = [None, None, None, None]
-for det_idx, mid in recognition_results:
-    if mid is None:
-        continue
-    # mid 是 DB slot_id(1-4)；取该检测框的 display 坐标
-    det = det_boxes[det_idx]
-    x, y, w, h = det[:4]
-    x = int(x * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-    y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-    w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-    h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-    conf = int(det[4] * 100) if len(det) > 4 else 0
-    if 1 <= mid <= 4:
-        slots[mid - 1] = (mid, x, y, w, h, conf)
+if det_boxes and landms and _face_reg is not None:
+    for i in range(len(det_boxes)):
+        try:
+            _face_reg.config_preprocess(landms[i])
+            feature = _face_reg.run(img_np)
+            mid = database_search(feature, _db_features)
+            if mid is not None:
+                recognition_results.append((i, mid))
+                det = det_boxes[i]
+                x, y, w, h = det[:4]
+                x = int(x * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+                y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+                h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                conf = int(det[4] * 100) if len(det) > 4 else 0
+                if 1 <= mid <= 4:
+                    slots[mid - 1] = (mid, x, y, w, h, conf)
+        except Exception as e:
+            print("[face_detect] recog error: %s" % e)
+    # K2 注册：注册当前帧最大脸（保留原 _id_registry 逻辑）
+    if _id_registry is not None and _id_registry.has_pending() and det_boxes:
+        max_i = max(range(len(det_boxes)),
+                    key=lambda j: det_boxes[j][2] * det_boxes[j][3])
+        try:
+            _face_reg.config_preprocess(landms[max_i])
+            feature = _face_reg.run(img_np)
+            slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
+            if slot is not None:
+                _db_features[slot] = feature
+                recognition_results.append((max_i, slot))
+                if 1 <= slot <= 4:
+                    slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
+                _refresh_count()
+        except Exception as e:
+            print("[face_detect] register error: %s" % e)
+
+_face_det.draw_result(img, det_boxes, recognition_results)
 if _RUNTIME is not None and _RUNTIME.host is not None:
     _RUNTIME.host_tick(slots)
+gc.collect()
 ```
 
 说明：
-- `recognition_results` 现状只有1项（最大脸），故最多1槽有值，符合"只识最大脸"
-- `det[4]` 是置信度（det 前几位是 x,y,w,h,score），取整 0-100；越界兜底0
+- `recognition_results` 现可含多项（每个匹配到的脸），`draw_result` 已支持遍历
+- K2 注册仍取最大脸（注册语义不变），注册后立即填该 slot（坐标暂0，下帧自然更新）
+- `det[4]` 是置信度，取整 0-100；越界兜底0
 - display 坐标缩放与 `draw_result` 一致
+- ⚠️ 多脸 reg 在板端首次验证；如卡死见 spec 降级方案（降频），不在本任务实现内
 
 ## 边界 / 不在本次改动
 
 1. **协议长度/校验与 `通讯协议.txt` 不一致**：现有 `_checksum`/`send_frame`/`send_id_data` 的 `length=1+payload`、应答 payload `"Play Application"`(17B) 已是已部署行为，本次**不动**组帧逻辑。doc 写 `length=payload`、`"Play Aplication"`(15B) 与代码不符，要核对上位机抓包另开任务。
 2. **request 帧目标地址**：doc 请求帧 `5A 97 98 …` 第3字节 `0x98` 与地址表 `0xA7` 不符；`poll_handshake` 用子串匹配 magic 不校验地址，不影响触发，不本次改。
-3. **face_detect NPU 成本不变**：维持只识最大脸，不引入多脸识别（避免坑#16 NPU 累积丢帧）。
+3. **face_detect NPU 成本上升**：识全部脸 → 每帧最多 N 次 reg（N=检测到的人脸数）。本次为多脸 reg 首次板端验证；如卡死走降频降级（另开任务，不在本次实现）。
 4. **UART 异常隔离**：`send_frame` 已 try/except，异常置 `connected=False`，不杀主循环。`host_tick` 不再加额外保护（host.tick 内部已 try）。
 
 ## 测试策略（host 侧 AST 契约测试，板端模块 Windows 不可导入）
@@ -167,6 +203,6 @@ if _RUNTIME is not None and _RUNTIME.host is not None:
 - Modify: `scripts/_template/app.py` — `run` 循环加 `runtime.host_tick()`
 - Modify: `scripts/camera/app.py` — `run` 循环加 `runtime.host_tick()`
 - Modify: `scripts/settings/app.py` — `run` 循环加 `runtime.host_tick()`
-- Modify: `scripts/face_detect/app.py` — `on_frame` 构建槽位 + `host_tick(slots)`
+- Modify: `scripts/face_detect/app.py` — `on_frame` 改识全部脸（每框 reg + 匹配填槽）+ 构建4槽位 + `host_tick(slots)`
 - Create: `tests/test_host_api.py`（若不存在）
 - Modify: `tests/test_framework.py`、`tests/test_face_detect_template.py`
