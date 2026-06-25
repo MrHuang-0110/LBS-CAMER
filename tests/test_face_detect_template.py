@@ -132,7 +132,7 @@ def test_template_ui_helpers_exist():
     for name in ("_build_ui", "_destroy_ui"):
         assert name in funcs, "template UI helper missing: %s" % name
     src = _src()
-    assert "人脸检测" in src, "title should be 人脸检测"
+    assert "人脸识别" in src, "title should be 人脸识别"
     assert "set_style_bg_opa(0" in src, "screen/preview must be transparent for OSD1"
 
 
