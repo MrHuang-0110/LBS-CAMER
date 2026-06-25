@@ -172,6 +172,7 @@ def run(runtime):
         except Exception as e:
             print("[template] on_frame error: %s" % e)
         Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+        runtime.host_tick()
         time.sleep_ms(lv.task_handler())
         fc += 1
         if fc % 30 == 0:

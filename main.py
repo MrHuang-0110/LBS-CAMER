@@ -95,6 +95,7 @@ def run_menu():
     while True:
         os.exitpoint()
         _th = lv.task_handler()
+        runtime.host_tick()
         time.sleep_ms(_th if _th > 0 else 5)
 
 

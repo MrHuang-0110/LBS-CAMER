@@ -76,6 +76,7 @@ def run(runtime):
     _build_ui(runtime, exit_flag)
     while not exit_flag[0]:
         os.exitpoint()
+        runtime.host_tick()
         time.sleep_ms(lv.task_handler())
     _destroy_ui()
 

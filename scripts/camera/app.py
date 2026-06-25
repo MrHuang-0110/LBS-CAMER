@@ -156,6 +156,7 @@ def run(runtime):
         # 处理 deferred 删除(从图库删除按钮回调入队;回调内直接删 list 会
         # use-after-free 死机,故 deferred 到主循环执行)
         _process_pending_deletes()
+        runtime.host_tick()
         time.sleep_ms(lv.task_handler())
     _destroy_ui()
 
