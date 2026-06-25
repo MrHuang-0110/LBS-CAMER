@@ -165,6 +165,39 @@ def test_core_init_has_no_legacy_side_effect_imports():
     assert not found, "core/__init__.py must not eager-import legacy modules: %s" % found
 
 
+def test_app_runtime_stores_category_id_in_init_menu():
+    """init_menu 必须存 self.category_id='main_menu'（host_tick 用）。"""
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    start = src.find("def init_menu(")
+    assert start != -1, "init_menu missing"
+    body = src[start:src.find("def ", start + 1)]
+    assert "category_id" in body and "main_menu" in body, \
+        "init_menu must set self.category_id = 'main_menu'"
+
+
+def test_app_runtime_stores_category_id_in_init_app():
+    """init_app 必须存 self.category_id=category_id（host_tick 用）。"""
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    start = src.find("def init_app(")
+    assert start != -1, "init_app missing"
+    body = src[start:src.find("def ", start + 1)]
+    assert "self.category_id" in body, \
+        "init_app must store self.category_id = category_id"
+
+
+def test_app_runtime_has_host_tick_method():
+    """AppRuntime 必须有 host_tick(slots=None) 方法（每帧握手+推送）。"""
+    src = open(RUNTIME_PATH, encoding="utf-8").read()
+    tree = _parse(RUNTIME_PATH)
+    cls = _class_node(tree, "AppRuntime")
+    methods = _method_names(cls)
+    assert "host_tick" in methods, "AppRuntime must have host_tick method"
+    start = src.find("def host_tick(")
+    seg = src[start:src.find("def ", start + 1)]
+    assert "self.host" in seg and "tick" in seg, \
+        "host_tick must call self.host.tick(...)"
+
+
 if __name__ == "__main__":
     failures = 0
     for name in sorted(n for n in dir() if n.startswith("test_")):

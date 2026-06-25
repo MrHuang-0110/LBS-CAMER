@@ -47,6 +47,7 @@ class AppRuntime:
         self.buzzer = None
         self.touch = None
         self._sensor_running = False
+        self.category_id = None
 
     def _init_display_and_media(self, to_ide=False):
         self.display = Display()
@@ -108,6 +109,7 @@ class AppRuntime:
     def init_menu(self, fpioa):
         """主菜单模式 init：Display/MediaManager/sensor(chn0)/LVGL/触摸/字体/图标/host。"""
         self.fpioa = fpioa
+        self.category_id = "main_menu"
         self._config_sensor([(CAM_CHN_ID_0, Sensor.VGA, Sensor.RGB888)])
         self._init_display_and_media()
         self._init_backlight(fpioa)
@@ -133,6 +135,7 @@ class AppRuntime:
         （之前 sensor 配置在 Display.init 前，与裸跑相反，致 face_detect 卡 fc~8。）
         """
         self.fpioa = fpioa
+        self.category_id = category_id
         channels = self._channels_for(category_id)
         # 1. Display.init 先（对齐裸跑）
         self.display = Display()
@@ -163,6 +166,8 @@ class AppRuntime:
         icon_cache.preload_back_icon()
         if category_id == "camera":
             icon_cache.preload_camera_icons()
+        elif category_id == "face_detect":
+            icon_cache.preload_face_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -193,6 +198,14 @@ class AppRuntime:
         fpioa.set_function(40, FPIOA.UART1_TXD)
         fpioa.set_function(41, FPIOA.UART1_RXD)
         self.host = HostAPI()
+
+    def host_tick(self, slots=None):
+        """每帧调：握手轮询 + 按当前 category 推送4组数据。
+
+        slots=None → 4组全0（主菜单/相机/settings）。face_detect 传匹配槽位。
+        """
+        if self.host is not None:
+            self.host.tick(self.category_id, slots)
 
     def cleanup(self):
         """脚本退出前清理（显式，虽 reset 会清）。"""
