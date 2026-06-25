@@ -37,6 +37,15 @@ class HostAPI:
     TYPE_OBJECT_CLASSIFY = 0x0A
     TYPE_IMAGE_CLASSIFY  = 0x0B
 
+    # category_id → msg_type 映射（reset 框架 category 与协议类型码对接）
+    CATEGORY_TYPE = {
+        "main_menu":  TYPE_MAIN_MENU,     # 0x01
+        "settings":   TYPE_MAIN_MENU,     # 0x01（复用主菜单）
+        "camera":     TYPE_CAMERA,        # 0x02
+        "face_detect":TYPE_FACE_DETECT,   # 0x03
+        "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
+    }
+
     # 握手相关
     HANDSHAKE_CMD = 0x09
     HANDSHAKE_REPLY_PAYLOAD = b"Play Application"
@@ -88,12 +97,20 @@ class HostAPI:
             self._connected = False
 
     def send_face_data(self, slots):
-        """发送4组人脸识别数据（类型0x03）。
+        """发送4组人脸识别数据（类型0x03）。薄封装 → send_id_data。
 
         Args:
-            slots: list of 4 tuples or None.
-                   每个 tuple = (id, x, y, w, h, confidence)
-                   None 或未使用的槽位保持全0字节。
+            slots: list of 4 tuples or None. 详见 send_id_data。
+        """
+        self.send_id_data(self.TYPE_FACE_DETECT, slots)
+
+    def send_id_data(self, msg_type, slots=None):
+        """发送4组ID数据（泛化 send_face_data，所有脚本共用）。
+
+        Args:
+            msg_type: 类型码 (int, 1字节)
+            slots: list[4]，每元素 None 或 (id,x,y,w,h,conf)。
+                   None / 越界 → 该组全0。
                    每组 10 字节: id(1B) + x(2B LE) + y(2B LE)
                                 + w(2B LE) + h(2B LE) + conf(1B)
                    总计 40 字节数据载荷。
@@ -101,7 +118,7 @@ class HostAPI:
         buf = bytearray(40)
         for i in range(4):
             off = i * 10
-            slot = slots[i] if i < len(slots) else None
+            slot = slots[i] if (slots is not None and i < len(slots)) else None
             if slot is not None:
                 fid, x, y, w, h, conf = slot
                 buf[off]     = fid & 0xFF
@@ -115,7 +132,18 @@ class HostAPI:
                 buf[off + 8] = (h >> 8) & 0xFF
                 buf[off + 9] = conf & 0xFF
             # else: 保持 0（未使用槽位全0）
-        self.send_frame(self.TYPE_FACE_DETECT, bytes(buf))
+        self.send_frame(msg_type, bytes(buf))
+
+    def tick(self, category_id, slots=None):
+        """每帧调：握手轮询 + 按 category 推送4组数据。
+
+        Args:
+            category_id: reset 框架 category（"main_menu"/"camera"/...）
+            slots: list[4] 或 None。None → 4组全0（主菜单/相机/settings）。
+        """
+        self.poll_handshake()
+        msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
+        self.send_id_data(msg_type, slots)
 
     # ── 握手状态机 ──
 
