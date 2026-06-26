@@ -13,6 +13,7 @@
 # 类型码见 通讯协议.txt 类型表（0x01主菜单 ~ 0x0B图像分类）。
 
 from machine import UART
+import time as _time
 
 
 class HostAPI:
@@ -67,6 +68,13 @@ class HostAPI:
         self._rx_buf = bytearray()
         self._last_handshake_ms = 0  # 上次应答握手的时间戳(0=从未应答)
         self._handlers = {}
+        # 预分配发送帧缓冲(复用,每帧零分配 → 防主菜单挂机 mem 线性泄漏)。
+        # 帧 = HEAD+SRC+DST+length(4) + type(1) + payload(≤40) + chk(1) + TAIL(1)。
+        # 数据帧 payload 固定 40 → 总 47;握手应答 payload 15 → 总 22。预分配 64 够用。
+        self._tx = bytearray(64)
+        self._tx_len = 0
+        # 预分配 id 数据载荷缓冲(40B),send_id_data 每帧复用,零分配。
+        self._id_payload = bytearray(40)
 
     # ── 公开属性 ──
 
@@ -85,20 +93,33 @@ class HostAPI:
         return s
 
     def send_frame(self, msg_type, payload=b''):
-        """组装并发送完整协议帧。
+        """组装并发送完整协议帧(预分配 _tx 复用,每帧零临时分配)。
 
         Args:
             msg_type: 类型码 (int, 1字节)
-            payload: 负载数据 (bytes)
+            payload: 负载数据 (bytes/bytearray)
         """
-        inner = bytearray([msg_type]) + bytes(payload)
         length = len(payload)  # 主机 dataAgreeAnalys: data[3]=length 只算 payload,type 在 data[4] 不计入
-        header = bytearray([self.FRAME_HEAD, self.SRC_ADDR,
-                            self.DST_ADDR, length])
-        chk = self._checksum(header + inner)
-        frame = bytes(header) + bytes(inner) + bytearray([chk, self.FRAME_TAIL])
+        tx = self._tx
+        # [HEAD, SRC, DST, length, type, *payload, chk, TAIL]
+        tx[0] = self.FRAME_HEAD
+        tx[1] = self.SRC_ADDR
+        tx[2] = self.DST_ADDR
+        tx[3] = length
+        tx[4] = msg_type
+        # 拷贝 payload 到 tx[5:5+length](避免 bytes() 拼接产生临时对象)
+        for i in range(length):
+            tx[5 + i] = payload[i]
+        # 校验和:从 HEAD 到 payload 末尾(不含 chk/TAIL)
+        chk = 0
+        for i in range(5 + length):
+            chk = (chk + tx[i]) & 0xFF
+        tx[5 + length] = chk
+        tx[5 + length + 1] = self.FRAME_TAIL
+        total = 5 + length + 2
+        self._tx_len = total
         try:
-            self._uart.write(frame)
+            self._uart.write(tx[:total])
         except Exception as e:
             print(f"[HostAPI] send_frame error: {e}")
             self._connected = False
@@ -124,7 +145,10 @@ class HostAPI:
                    (data[off+1]<<8)|data[off+2]。小端会致坐标值错乱。
                    总计 40 字节数据载荷。
         """
-        buf = bytearray(40)
+        buf = self._id_payload  # 预分配复用,每帧零分配
+        # 清零(上帧残留:None 槽位须保持 0)
+        for i in range(40):
+            buf[i] = 0
         for i in range(4):
             off = i * 10
             slot = slots[i] if (slots is not None and i < len(slots)) else None
@@ -140,8 +164,8 @@ class HostAPI:
                 buf[off + 7] = (h >> 8) & 0xFF
                 buf[off + 8] = h & 0xFF
                 buf[off + 9] = conf & 0xFF
-            # else: 保持 0（未使用槽位全0）
-        self.send_frame(msg_type, bytes(buf))
+            # else: 已清零,保持 0（未使用槽位全0）
+        self.send_frame(msg_type, buf)
 
     def tick(self, category_id, slots=None):
         """每帧调：握手轮询 + 按 category 推送4组数据。
@@ -154,7 +178,6 @@ class HostAPI:
         # 握手应答后 100ms 静默期:不足 100ms 跳过数据帧发送(用户确认)。
         # 主机超时检测的是"有没有收到数据帧";持续发数据帧则主机不重发握手。
         if self._last_handshake_ms != 0:
-            import time as _time
             if _time.ticks_diff(_time.ticks_ms(), self._last_handshake_ms) < self.HANDSHAKE_COOLDOWN_MS:
                 return
         msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
@@ -220,7 +243,6 @@ class HostAPI:
 
     def _send_handshake_reply(self):
         """发送握手应答帧 + 记录应答时间戳(100ms 静默期起点)"""
-        import time as _time
         self.send_frame(self.HANDSHAKE_CMD, self.HANDSHAKE_REPLY_PAYLOAD)
         self._connected = True
         self._last_handshake_ms = _time.ticks_ms()
