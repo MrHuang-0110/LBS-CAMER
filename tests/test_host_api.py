@@ -175,6 +175,23 @@ def test_tick_has_handshake_cooldown_before_sending_data():
         "tick must use time.ticks_ms/ticks_diff for the cooldown check"
 
 
+def test_poll_handshake_rfind_does_not_pass_int():
+    """poll_handshake 的 rfind 不得直接传 int(FRAME_HEAD)。
+
+    MicroPython bytearray.rfind 不接受 int 参数,传 int 会崩
+    "can't convert 'int' object to str implicitly"(UART 收到数据即触发,
+    run_menu 第一帧卡死)。必须传 bytes,如 buf.rfind(bytes([self.FRAME_HEAD]))。
+    CPython 接受 int,故 host AST 测试须显式守护。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    m = _method_node(cls, "poll_handshake")
+    seg = ast.get_source_segment(src, m) or ""
+    assert "rfind(self.FRAME_HEAD)" not in seg, \
+        "poll_handshake must not rfind(self.FRAME_HEAD) (int crashes MicroPython); use bytes([self.FRAME_HEAD])"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):

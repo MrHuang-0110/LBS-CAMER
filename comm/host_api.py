@@ -204,7 +204,8 @@ class HostAPI:
 
         if matched_at < 0:
             # 未匹配:保留从最后一个 0x5A 开始的尾部(可能是半帧,等下次拼)
-            last_head = buf.rfind(self.FRAME_HEAD)
+            # MicroPython bytearray.rfind 不接受 int,须传 bytes
+            last_head = buf.rfind(bytes([self.FRAME_HEAD]))
             if last_head > 0:
                 self._rx_buf = bytearray(buf[last_head:])
             else:
