@@ -43,6 +43,7 @@ class HostAPI:
         "settings":   TYPE_MAIN_MENU,     # 0x01（复用主菜单）
         "camera":     TYPE_CAMERA,        # 0x02
         "face_detect":TYPE_FACE_DETECT,   # 0x03
+        "tag_detect": TYPE_TAG_DETECT,    # 0x04
         "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
     }
 
