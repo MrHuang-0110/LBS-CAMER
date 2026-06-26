@@ -32,7 +32,7 @@ def test_category_type_mapping_covers_all_categories():
     assert "CATEGORY_TYPE" in src, "must define CATEGORY_TYPE mapping"
     for cat, code in [("main_menu", "0x01"), ("settings", "0x01"),
                       ("camera", "0x02"), ("face_detect", "0x03"),
-                      ("tag_detect", "0x04"),
+                      ("tag_detect", "0x04"), ("object_detect", "0x05"),
                       ("_template", "0x01")]:
         assert ('"%s"' % cat) in src or ("'%s'" % cat) in src, \
             "CATEGORY_TYPE must cover %s" % cat
