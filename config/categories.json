@@ -118,7 +118,7 @@
       "name_key": "category.template",
       "desc_key": "category.template_desc",
       "ui_mode": "stream",
-      "enabled": true,
+      "enabled": false,
       "order": 99
     }
   ]

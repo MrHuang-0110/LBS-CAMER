@@ -100,7 +100,11 @@ def test_template_package_init_exists():
 
 
 def test_categories_json_has_template():
-    """config/categories.json must register _template category with stream ui_mode."""
+    """config/categories.json must register _template category with stream ui_mode.
+
+    _template 是开发模板脚本,默认 enabled=False(不进主菜单,仅作新脚本参考)。
+    故只校验条目存在 + script/ui_mode 字段,不强制 enabled=True。
+    """
     import json
     with open(CATEGORIES_PATH, encoding="utf-8") as f:
         data = json.load(f)
@@ -110,7 +114,6 @@ def test_categories_json_has_template():
     t = template[0]
     assert t.get("script") == "_template", "script field must be _template"
     assert t.get("ui_mode") == "stream", "ui_mode must be stream"
-    assert t.get("enabled", True) is True, "must be enabled"
     assert "icon" in t, "must have icon field"
 
 
