@@ -21,6 +21,9 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 NEXT_SCRIPT_PATH = "/sdcard/CamerAi/.next_script"
+# 热启动标记：脚本返回主菜单前的 reset 写入此文件，run_menu 据此跳过开机 LOGO。
+# 仅真正上电/断电重启时此文件不存在 → 显示 LOGO。避免每次从脚本返回都重显 LOGO。
+WARM_BOOT_PATH = "/sdcard/CamerAi/.warm_boot"
 
 
 def _read_next_script():
@@ -45,6 +48,25 @@ def _clear_next_script():
         os.remove(NEXT_SCRIPT_PATH)
     except Exception:
         pass
+
+
+def _is_warm_boot():
+    """是否热启动(reset 回菜单,非上电)。读取并删除标记(一次性消费)。"""
+    try:
+        os.stat(WARM_BOOT_PATH)
+        os.remove(WARM_BOOT_PATH)
+        return True
+    except Exception:
+        return False
+
+
+def _mark_warm_boot():
+    """脚本返回主菜单前调用,标记本次 reset 为热启动(跳过开机 LOGO)。"""
+    try:
+        with open(WARM_BOOT_PATH, "w") as f:
+            f.write("1")
+    except Exception as e:
+        print("[CamerAi] write .warm_boot failed: %s" % e)
 
 
 def _load_script(category_id):
@@ -100,8 +122,11 @@ def run_menu():
                     on_card_click=on_card_click)
     # preload_icons 必须在 BootSplash 之前：首次 task_handler 前的文件 I/O 安全窗口
     menu.preload_icons()
-    # 开机 LOGO（BootSplash 内部 open logo 在首次 task_handler 前，安全；阻塞显示后清理）
-    BootSplash(runtime.buzzer).show()
+    # 开机 LOGO：仅真正上电/断电重启时显示（.warm_boot 不存在）。
+    # 从脚本返回主菜单是热启动(reset)，run_script 末尾已写 .warm_boot → 跳过 LOGO。
+    if not _is_warm_boot():
+        # BootSplash 内部 open logo 在首次 task_handler 前，安全；阻塞显示后清理
+        BootSplash(runtime.buzzer).show()
     menu.show()
     print("[CamerAi] main menu running")
     while True:
@@ -136,6 +161,8 @@ def run_script(category_id):
     except Exception as e:
         print("[CamerAi] cleanup error: %s" % e)
     _clear_next_script()
+    # 标记热启动：reset 回菜单后 run_menu 据此跳过开机 LOGO（仅上电才显 LOGO）。
+    _mark_warm_boot()
     machine.reset()
 
 
