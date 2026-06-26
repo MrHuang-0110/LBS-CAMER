@@ -172,6 +172,8 @@ class AppRuntime:
             icon_cache.preload_tag_icons()
         elif category_id == "object_detect":
             icon_cache.preload_object_icons()
+        elif category_id == "color_detect":
+            icon_cache.preload_color_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -192,6 +194,10 @@ class AppRuntime:
             # chn2 XGA RGBP888 专做 AI 推理(同 face_detect AI 通道)；
             # chn0 VGA RGB888 显示。检测框 rgb888p->display 整数缩放。
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+        elif category_id == "color_detect":
+            # chn1 QVGA RGB565 专做 find_blobs 颜色检测(同 tag_detect)；
+            # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示(QVGA→VGA)。
+            chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs
