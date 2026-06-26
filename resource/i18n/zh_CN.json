@@ -68,6 +68,11 @@
     "clear": "清除",
     "save": "保存"
   },
+  "object_detect": {
+    "registered": "已注册 %d/4",
+    "clear": "清除",
+    "save": "保存"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"

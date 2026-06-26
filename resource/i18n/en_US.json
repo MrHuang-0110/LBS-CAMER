@@ -68,6 +68,11 @@
     "clear": "Clear",
     "save": "Save"
   },
+  "object_detect": {
+    "registered": "Registered %d/4",
+    "clear": "Clear",
+    "save": "Save"
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"
