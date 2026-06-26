@@ -61,6 +61,11 @@
     "back_fb": "<",
     "list_fb": "="
   },
+  "tag_detect": {
+    "april_tag": "AprilTag",
+    "qr_code": "二维码",
+    "registered": "已注册 %d/4"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"

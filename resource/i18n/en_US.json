@@ -61,6 +61,11 @@
     "back_fb": "<",
     "list_fb": "="
   },
+  "tag_detect": {
+    "april_tag": "AprilTag",
+    "qr_code": "QR Code",
+    "registered": "Registered %d/4"
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"
