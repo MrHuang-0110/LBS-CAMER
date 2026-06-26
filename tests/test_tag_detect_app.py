@@ -129,6 +129,16 @@ def test_run_loop_processes_overlay_close():
     assert "_process_overlay_close" in seg, "run loop must call _process_overlay_close()"
 
 
+def test_on_frame_draws_center_green_crosshair():
+    """on_frame 须在屏幕居中画一个小绿色十字(对齐 face_detect)。
+
+    VGA 640x480 屏幕中心 (320, 240)。draw_cross(x, y, color, size, thickness)。
+    """
+    seg = ast.get_source_segment(_app_src(), _func("on_frame")) or ""
+    assert "draw_cross" in seg, "on_frame must draw a center crosshair"
+    assert "320" in seg and "240" in seg, "crosshair must be at screen center (320, 240)"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):

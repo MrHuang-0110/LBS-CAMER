@@ -146,6 +146,9 @@ def on_frame(img):
             except Exception as e:
                 print("[face_detect] register error: %s" % e)
 
+    # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
+    img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+
     _face_det.draw_result(img, det_boxes, recognition_results)
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)

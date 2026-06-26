@@ -88,6 +88,17 @@ def test_on_frame_uses_chn2_and_does_not_show_image():
     assert "Display.show_image" not in src, "on_frame must not write display directly"
 
 
+def test_on_frame_draws_center_green_crosshair():
+    """on_frame 须在屏幕居中画一个小绿色十字(对齐 tag_detect)。
+
+    VGA 640x480 屏幕中心 (320, 240)。draw_cross(x, y, color, size, thickness)。
+    """
+    fn = _function_node(_parse(), "on_frame")
+    seg = ast.get_source_segment(_src(), fn) or ""
+    assert "draw_cross" in seg, "on_frame must draw a center crosshair"
+    assert "320" in seg and "240" in seg, "crosshair must be at screen center (320, 240)"
+
+
 def test_ai_init_and_deinit_helpers_exist_and_used():
     tree = _parse()
     funcs = _module_function_names(tree)

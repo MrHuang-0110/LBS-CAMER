@@ -122,6 +122,9 @@ def on_frame(img):
                                w * DET_SCALE, h * DET_SCALE,
                                color=color, thickness=2)
 
+    # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
+    img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+
     # KEY2 注册:pending 且当前帧有检测到码 -> 存入下一槽
     if _id_registry is not None and _id_registry.has_pending() and detected:
         code_id, _rect = detected[0]
