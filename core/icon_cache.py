@@ -29,7 +29,7 @@ class _IconCache:
         for item_id, path in icons.items():
             try:
                 with open(path, 'rb') as f:
-                    data = f.read()
+                    data = bytearray(f.read())
                 dsc = lv.img_dsc_t({
                     'data_size': len(data),
                     'data': data,
@@ -54,7 +54,7 @@ class _IconCache:
         back_path = "/sdcard/CamerAi/resource/icons/settings_icon/back.png"
         try:
             with open(back_path, 'rb') as f:
-                data = f.read()
+                data = bytearray(f.read())
             dsc = lv.img_dsc_t({
                 'data_size': len(data),
                 'data': data,
@@ -84,7 +84,7 @@ class _IconCache:
         for name, path in icons.items():
             try:
                 with open(path, 'rb') as f:
-                    data = f.read()
+                    data = bytearray(f.read())
                 dsc = lv.img_dsc_t({
                     'data_size': len(data),
                     'data': data,
@@ -108,7 +108,7 @@ class _IconCache:
         for name, path in icons.items():
             try:
                 with open(path, 'rb') as f:
-                    data = f.read()
+                    data = bytearray(f.read())
                 dsc = lv.img_dsc_t({
                     'data_size': len(data),
                     'data': data,
@@ -132,7 +132,7 @@ class _IconCache:
         for name, path in icons.items():
             try:
                 with open(path, 'rb') as f:
-                    data = f.read()
+                    data = bytearray(f.read())
                 dsc = lv.img_dsc_t({
                     'data_size': len(data),
                     'data': data,
@@ -156,7 +156,7 @@ class _IconCache:
         for name, path in icons.items():
             try:
                 with open(path, 'rb') as f:
-                    data = f.read()
+                    data = bytearray(f.read())
                 dsc = lv.img_dsc_t({
                     'data_size': len(data),
                     'data': data,
