@@ -26,6 +26,26 @@ CARD_ACTIVE = 0x2E7D32   # 选中卡片绿色
 # chn1 QVGA(320x240) -> chn0 VGA(640x480):坐标 x2 整数缩放
 DET_SCALE = 2
 
+# 画框配色对齐 face_detect(core/face_ai):未注册白框,注册按 slot 取彩色。
+BOX_COLORS = {
+    1: 0x44CC44,   # 绿
+    2: 0x4488FF,   # 蓝
+    3: 0xFF8844,   # 橙
+    4: 0xCC44FF,   # 紫
+}
+BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+
+
+def _draw_color(hex_color):
+    """hex 0xRRGGBB -> K230 draw_rectangle color tuple (A, B, G, R)。
+
+    与 face_ai._draw_color 一致:在 RGB888 图上画框用 (A,B,G,R) 顺序。
+    """
+    r = (hex_color >> 16) & 0xFF
+    g = (hex_color >> 8) & 0xFF
+    b = hex_color & 0xFF
+    return (0xFF, b, g, r)
+
 _RUNTIME = None
 _screen = None
 _top_bar = None
@@ -38,6 +58,10 @@ _qr_db = None
 _active_fn = "april"      # "april" | "qr"
 _april_card = None
 _qr_card = None
+_overlay = None
+_clear_btn = None
+_save_btn = None
+_close_overlay = False
 
 
 def _active_db():
@@ -79,22 +103,24 @@ def on_frame(img):
             rect = code.rect()
             detected.append((code_id, rect))
 
-    # 匹配 DB,命中填槽位 + chn0 画框
+    # 匹配 DB,命中填槽位 + chn0 画框(对齐 face_detect:未注册白框,注册彩色)
     for code_id, rect in detected:
         x, y, w, h = [int(v) for v in rect]
         slot, score = db.match(code_id)
         if slot is not None:
             slots[slot - 1] = (slot, x * DET_SCALE, y * DET_SCALE,
                                w * DET_SCALE, h * DET_SCALE, 100)
-            img.draw_rectangle([x * DET_SCALE, y * DET_SCALE,
-                                w * DET_SCALE, h * DET_SCALE],
-                               color=(0, 255, 0), thickness=4)
+            color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
+            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
+                               w * DET_SCALE, h * DET_SCALE,
+                               color=color, thickness=4)
             img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
-                                     "id%d" % slot)
+                                     "ID%d" % slot, color=color)
         else:
-            img.draw_rectangle([x * DET_SCALE, y * DET_SCALE,
-                                w * DET_SCALE, h * DET_SCALE],
-                               color=(255, 0, 0), thickness=2)
+            color = _draw_color(BOX_UNKNOWN)
+            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
+                               w * DET_SCALE, h * DET_SCALE,
+                               color=color, thickness=2)
 
     # KEY2 注册:pending 且当前帧有检测到码 -> 存入下一槽
     if _id_registry is not None and _id_registry.has_pending() and detected:
@@ -115,6 +141,99 @@ def _refresh_count():
                 _RUNTIME.lang.t("tag_detect.registered", _active_db().count))
         except Exception:
             pass
+
+
+def _on_list_clicked(e):
+    """弹出清除/保存浮层(叠加在底栏上方,对齐 face_detect)。"""
+    global _overlay, _clear_btn, _save_btn
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    if _overlay is not None:
+        return
+    from ui.theme import make_back_bar_text_style
+    _overlay = lv.obj(lv.scr_act())
+    _overlay.set_size(lv.pct(100), BAR_H)
+    _overlay.set_pos(0, PREVIEW_Y + PREVIEW_H - BAR_H)
+    _overlay.set_style_bg_color(lv.color_hex(BAR_BG), 0)
+    _overlay.set_style_bg_opa(255, 0)
+    _overlay.set_style_border_width(0, 0)
+    _overlay.set_style_pad_all(0, 0)
+    _overlay.set_style_radius(0, 0)
+    _overlay.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    _overlay.add_flag(lv.obj.FLAG.CLICKABLE)
+    _overlay.add_event(_on_overlay_clicked, lv.EVENT.CLICKED, None)
+
+    _clear_btn = lv.btn(_overlay)
+    _clear_btn.set_size(120, 40)
+    _clear_btn.align(lv.ALIGN.LEFT_MID, 20, 0)
+    cl = lv.label(_clear_btn)
+    cl.set_text(_RUNTIME.lang.t("tag_detect.clear"))
+    cl.add_style(make_back_bar_text_style(fonts.body), 0)
+    cl.center()
+    _clear_btn.add_event(_on_clear_clicked, lv.EVENT.CLICKED, None)
+
+    _save_btn = lv.btn(_overlay)
+    _save_btn.set_size(120, 40)
+    _save_btn.align(lv.ALIGN.RIGHT_MID, -20, 0)
+    sv = lv.label(_save_btn)
+    sv.set_text(_RUNTIME.lang.t("tag_detect.save"))
+    sv.add_style(make_back_bar_text_style(fonts.body), 0)
+    sv.center()
+    _save_btn.add_event(_on_save_clicked, lv.EVENT.CLICKED, None)
+
+
+def _on_overlay_clicked(e):
+    """点浮层空白处关闭浮层。"""
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _close_overlay = True
+
+
+def _on_screen_clicked(e):
+    """点 screen 任意位置关闭浮层(浮层开着时)。"""
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    if _overlay is not None:
+        _close_overlay = True
+
+
+def _on_clear_clicked(e):
+    """清当前激活 db 内存 + 蜂鸣 + 关浮层。不删盘(持久化待定)。"""
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _active_db().clear()
+    _refresh_count()
+    if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+        _RUNTIME.buzzer.beep(ms=200)
+    _close_overlay = True
+
+
+def _on_save_clicked(e):
+    """空操作(退出自动持久化,当前 no-op)。只标志关闭浮层。"""
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _close_overlay = True
+
+
+def _process_overlay_close():
+    """主循环 deferred 关闭浮层(LVGL use-after-free 防护)。"""
+    global _overlay, _clear_btn, _save_btn, _close_overlay
+    if not _close_overlay:
+        return
+    _close_overlay = False
+    for obj in (_clear_btn, _save_btn, _overlay):
+        if obj is not None:
+            try:
+                obj.delete()
+            except Exception:
+                pass
+    _clear_btn = None
+    _save_btn = None
+    _overlay = None
 
 
 def _switch_fn(fn):
@@ -161,6 +280,8 @@ def _build_ui(runtime, exit_flag):
     global _april_card, _qr_card
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
+    screen.add_flag(lv.obj.FLAG.CLICKABLE)
+    screen.add_event(_on_screen_clicked, lv.EVENT.CLICKED, None)
     _screen = screen
 
     # 顶栏:返回钮 + 标题
@@ -238,7 +359,7 @@ def _build_ui(runtime, exit_flag):
     _bottom_bar.set_style_radius(0, 0)
     _bottom_bar.clear_flag(lv.obj.FLAG.SCROLLABLE)
 
-    # list 图标(只显示不绑功能)
+    # list 图标(点击弹清除/保存浮层,对齐 face_detect)
     list_btn = lv.obj(_bottom_bar)
     list_btn.set_size(48, 48)
     list_btn.align(lv.ALIGN.LEFT_MID, 2, 0)
@@ -246,6 +367,8 @@ def _build_ui(runtime, exit_flag):
     list_btn.set_style_border_width(0, 0)
     list_btn.set_style_pad_all(0, 0)
     list_btn.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    list_btn.add_flag(lv.obj.FLAG.CLICKABLE)
+    list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
     list_icon_data, list_icon_dsc = icon_cache.get_tag_icon("list")
     if list_icon_dsc is not None and list_icon_data is not None:
         import struct
@@ -273,12 +396,17 @@ def _build_ui(runtime, exit_flag):
 
 def _destroy_ui():
     global _screen, _top_bar, _bottom_bar, _preview, _count_label, _april_card, _qr_card
-    for obj in (_april_card, _qr_card, _top_bar, _bottom_bar, _preview, _count_label):
+    global _overlay, _clear_btn, _save_btn
+    for obj in (_clear_btn, _save_btn, _overlay, _april_card, _qr_card,
+                _top_bar, _bottom_bar, _preview, _count_label):
         if obj is not None:
             try:
                 obj.delete()
             except Exception:
                 pass
+    _clear_btn = None
+    _save_btn = None
+    _overlay = None
     _april_card = None
     _qr_card = None
     _top_bar = None
@@ -319,6 +447,7 @@ def run(runtime):
                     pass
             if _id_registry is not None:
                 _id_registry.poll_k2()
+            _process_overlay_close()
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1

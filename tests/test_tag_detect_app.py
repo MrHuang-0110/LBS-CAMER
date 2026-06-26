@@ -77,6 +77,58 @@ def test_app_uses_i18n_not_hardcoded():
         assert ('"%s"' % s) not in src, "must not hardcode '%s'; use i18n" % s
 
 
+def test_on_frame_white_unknown_and_slot_color_boxes():
+    """画框对齐 face_detect:未注册白框(BOX_UNKNOWN),注册按 slot 彩色(BOX_COLORS)。
+
+    face_detect(core/face_ai.draw_result):BOX_UNKNOWN=0xFFFFFF(白),BOX_COLORS
+    按 slot 取色(1绿/2蓝/3橙/4紫),_draw_color 转 RGB888 的 (A,B,G,R)。
+    旧 tag_detect 用红框(255,0,0)/统一绿框,不对齐 → 改白框+彩色。
+    """
+    src = _app_src()
+    seg = ast.get_source_segment(src, _func("on_frame")) or ""
+    # 不得用红框 (255, 0, 0)
+    assert "(255, 0, 0)" not in seg, \
+        "unknown box must be white (BOX_UNKNOWN), not red (255, 0, 0)"
+    # 不得用统一绿框 (0, 255, 0)
+    assert "(0, 255, 0)" not in seg, \
+        "registered box must use per-slot BOX_COLORS, not uniform green (0, 255, 0)"
+    # 须定义/使用 BOX_UNKNOWN(白) + BOX_COLORS(slot 彩色) + _draw_color
+    assert "BOX_UNKNOWN" in src, "must use BOX_UNKNOWN (white) for unregistered boxes"
+    assert "BOX_COLORS" in src, "must use BOX_COLORS (per-slot) for registered boxes"
+    assert "_draw_color" in src, "must use _draw_color for RGB888 color tuple"
+
+
+def test_list_overlay_handlers_exist():
+    """list 图标须绑定清除/保存浮层(对齐 face_detect)。"""
+    for fn in ["_on_list_clicked", "_on_clear_clicked", "_on_save_clicked",
+               "_on_overlay_clicked", "_on_screen_clicked", "_process_overlay_close"]:
+        try:
+            _func(fn)
+        except AssertionError:
+            assert False, "tag_detect must define %s for list overlay" % fn
+
+
+def test_list_button_binds_click_and_screen_closes_overlay():
+    """_build_ui:list_btn 须绑 _on_list_clicked;screen 须 CLICKABLE + 绑 _on_screen_clicked。"""
+    seg = ast.get_source_segment(_app_src(), _func("_build_ui")) or ""
+    assert "_on_list_clicked" in seg, "_build_ui must bind _on_list_clicked to list button"
+    assert "_on_screen_clicked" in seg, "_build_ui must bind _on_screen_clicked to screen"
+
+
+def test_clear_clicked_clears_active_db_and_refreshes():
+    """_on_clear_clicked 须清当前激活 db + 刷新计数 + 蜂鸣。"""
+    seg = ast.get_source_segment(_app_src(), _func("_on_clear_clicked")) or ""
+    assert "clear()" in seg, "_on_clear_clicked must clear active db"
+    assert "_refresh_count" in seg, "must refresh count after clear"
+    assert "buzzer" in seg, "must beep on clear"
+
+
+def test_run_loop_processes_overlay_close():
+    """主循环须调 _process_overlay_close()(deferred 关浮层,防 use-after-free)。"""
+    seg = ast.get_source_segment(_app_src(), _func("run")) or ""
+    assert "_process_overlay_close" in seg, "run loop must call _process_overlay_close()"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):

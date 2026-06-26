@@ -64,7 +64,9 @@
   "tag_detect": {
     "april_tag": "AprilTag",
     "qr_code": "QR Code",
-    "registered": "Registered %d/4"
+    "registered": "Registered %d/4",
+    "clear": "Clear",
+    "save": "Save"
   },
   "common": {
     "back": "Back",

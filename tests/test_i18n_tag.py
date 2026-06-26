@@ -20,7 +20,7 @@ def test_tag_detect_section_exists_both_langs():
 
 
 def test_tag_detect_keys_present():
-    required = ["april_tag", "qr_code", "registered"]
+    required = ["april_tag", "qr_code", "registered", "clear", "save"]
     for path in (ZH, EN):
         td = _load(path)["tag_detect"]
         for k in required:

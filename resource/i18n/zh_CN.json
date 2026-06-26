@@ -64,7 +64,9 @@
   "tag_detect": {
     "april_tag": "AprilTag",
     "qr_code": "二维码",
-    "registered": "已注册 %d/4"
+    "registered": "已注册 %d/4",
+    "clear": "清除",
+    "save": "保存"
   },
   "common": {
     "back": "返回",
