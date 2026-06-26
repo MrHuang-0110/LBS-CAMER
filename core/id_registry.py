@@ -28,7 +28,12 @@ class IdRegistry:
         fpioa.set_function(pin, FPIOA.GPIO0 + pin)
         self._k2 = Pin(pin, Pin.IN, Pin.PULL_UP)
         self._valid_level = valid_level
-        self._prev_pressed = False
+        # 初始化 _prev_pressed 为当前真实电平，避免脚本启动瞬间引脚电平
+        # 未稳定/上拉未建立时首次 poll_k2 产生假"按下"边沿（每次进脚本自动触发一次）。
+        # 读当前值对齐真实状态：若现在就是按下态，prev=True，不会误置 pending；
+        # 若是松开态，prev=False，正常等待真实按下边沿。
+        time.sleep_ms(5)  # 上拉稳定
+        self._prev_pressed = (self._k2.value() == self._valid_level)
         self._pending = False
         self._pending_time = 0
         self._last_slot = None
