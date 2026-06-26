@@ -18,6 +18,7 @@ class _IconCache:
         self._camera_icons = {}   # name → (data, dsc)
         self._face_icons = {}     # name → (data, dsc)
         self._tag_icons = {}      # name → (data, dsc)
+        self._object_icons = {}   # name → (data, dsc)
 
     def preload_settings_icons(self):
         """预读设置页图标（在首次 task_handler 之前调用）"""
@@ -144,6 +145,30 @@ class _IconCache:
     def get_tag_icon(self, name):
         """获取标签识别图标 (data, dsc)，未缓存返回 (None, None)"""
         return self._tag_icons.get(name, (None, None))
+
+    def preload_object_icons(self):
+        """预读物体识别APP图标（在首次 task_handler 之前调用）"""
+        base = "/sdcard/CamerAI/resource/icons/object_detect_icon/"
+        icons = {
+            "list": base + "list.png",
+            "back": base + "back.png",
+        }
+        for name, path in icons.items():
+            try:
+                with open(path, 'rb') as f:
+                    data = f.read()
+                dsc = lv.img_dsc_t({
+                    'data_size': len(data),
+                    'data': data,
+                })
+                self._object_icons[name] = (data, dsc)
+                print(f"[IconCache] object/{name} OK ({len(data)} bytes)")
+            except Exception as e:
+                print(f"[IconCache] object/{name} FAILED: {e}")
+
+    def get_object_icon(self, name):
+        """获取物体识别图标 (data, dsc)，未缓存返回 (None, None)"""
+        return self._object_icons.get(name, (None, None))
 
 
 # 全局单例

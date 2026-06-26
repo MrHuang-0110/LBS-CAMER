@@ -50,6 +50,30 @@ def test_preload_tag_icons_reads_tag_detect_icon_dir():
     assert "tag_detect_icon" in seg, "preload_tag_icons must read tag_detect_icon/"
 
 
+def test_preload_object_icons_exists():
+    """icon_cache 须有 preload_object_icons() 预读 object_detect 图标。"""
+    try:
+        _method("preload_object_icons")
+    except AssertionError:
+        assert False, "_IconCache must define preload_object_icons()"
+
+
+def test_get_object_icon_exists():
+    """icon_cache 须有 get_object_icon(name) 取 object 图标。"""
+    try:
+        m = _method("get_object_icon")
+    except AssertionError:
+        assert False, "_IconCache must define get_object_icon(name)"
+    args = [a.arg for a in m.args.args]
+    assert "name" in args, "get_object_icon must take name"
+
+
+def test_preload_object_icons_reads_object_detect_icon_dir():
+    """preload_object_icons 必须读 object_detect_icon/ 目录。"""
+    seg = ast.get_source_segment(_src(), _method("preload_object_icons")) or ""
+    assert "object_detect_icon" in seg, "preload_object_icons must read object_detect_icon/"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):
