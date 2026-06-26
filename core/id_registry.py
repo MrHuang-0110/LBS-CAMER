@@ -53,13 +53,17 @@ class IdRegistry:
             return False
         return True
 
-    def try_register(self, feature, buzzer=None):
-        """on_frame 调。pending(2秒内) → face_db.register + 蜂鸣 + 清 pending。
+    def try_register(self, feature, buzzer=None, registrar=None):
+        """on_frame 调。pending(2秒内) → 注册 + 蜂鸣 + 清 pending。
         返回 slot_id(1-4) 或 None（没按/超时/失败）。
 
         单线程：on_frame 先 has_pending() 判定，命中再提 feature 传入本方法，
-        避免无 pending 时重复 NPU 推理。feature：512维 ndarray。buzzer：Buzzer
-        实例或 None（无 buzzer 时静默，守卫安全）。
+        避免无 pending 时重复 NPU 推理。feature：512维 ndarray（face）/ 标量
+        code_id（tag）。buzzer：Buzzer 实例或 None。
+
+        registrar：可选注册函数，签名 registrar(feature)->slot_id。
+        None（默认）→ face_db.register（face_detect 向后兼容，零影响）。
+        tag_detect 传 tag_db.register 复用 K2 边沿/超时/蜂鸣逻辑。
         """
         if not self._pending:
             return None
@@ -70,8 +74,11 @@ class IdRegistry:
             return None
         self._pending = False
         try:
-            from core.face_db import face_db
-            slot = face_db.register(feature)
+            if registrar is not None:
+                slot = registrar(feature)
+            else:
+                from core.face_db import face_db
+                slot = face_db.register(feature)
             self._last_slot = slot
             if buzzer is not None:
                 buzzer.beep(ms=80)
