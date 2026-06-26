@@ -103,3 +103,366 @@ def _make_threshold(lab):
     Bmin = max(-128, B - 10)
     Bmax = min(127, B + 10)
     return (Lmin, Lmax, Amin, Amax, Bmin, Bmax)
+
+
+_RUNTIME = None
+_screen = None
+_top_bar = None
+_bottom_bar = None
+_preview = None
+_table = None          # 左表 4×3
+_count_label = None
+_id_registry = None
+_color_db = None
+_slider = None         # 共享滑块
+_thresh_labels = {}    # {key: label_obj} 6 格数值标签
+_thresh_cells = {}     # {key: cell_obj} 6 格容器
+_selected_key = "Lmin" # 当前选中格
+_thresh_values = {"Lmin": 0, "Lmax": 100, "Amin": -10, "Amax": 10,
+                  "Bmin": -10, "Bmax": 10}  # 当前 6 阈值
+_pending_click = None  # (x,y) 待取色,或 None
+_swatch = [None, None, None]  # 左表 3 槽采色历史 (lab, rgb) 或 None
+_overlay = None
+_clear_btn = None
+_save_btn = None
+_close_overlay = False
+
+
+def _init_registry(fpioa):
+    global _id_registry
+    _id_registry = IdRegistry(fpioa, pin=0)
+
+
+def _select_cell(key):
+    """选中某阈值格(置绿)+ 滑块 range/value 同步。"""
+    global _selected_key
+    _selected_key = key
+    for k, cell in _thresh_cells.items():
+        try:
+            cell.set_style_bg_color(
+                lv.color_hex(CARD_ACTIVE if k == key else CARD_BG), 0)
+        except Exception:
+            pass
+    # 同步滑块 range + value
+    if _slider is not None:
+        for k, _label, lo, hi, _dflt in THRESH_CELLS:
+            if k == key:
+                _slider.set_range(lo, hi)
+                _slider.set_value(_thresh_values.get(key, lo), lv.ANIM.OFF)
+                break
+
+
+def _on_slider_changed(e):
+    """滑块值变化 -> 更新选中格数值 + _thresh_values。"""
+    if e.get_code() != lv.EVENT.VALUE_CHANGED:
+        return
+    if _slider is None or _selected_key is None:
+        return
+    val = _slider.get_value()
+    _thresh_values[_selected_key] = val
+    lbl = _thresh_labels.get(_selected_key)
+    if lbl is not None:
+        try:
+            lbl.set_text(str(val))
+        except Exception:
+            pass
+
+
+def _make_cell(parent, key, label_key, lo, hi, dflt, align_x):
+    """建一个阈值格(可点选)+ 数值标签。"""
+    from ui.theme import make_back_bar_text_style
+    cell = lv.btn(parent)
+    cell.set_size(52, 44)
+    cell.align(lv.ALIGN.LEFT_MID, align_x, 0)
+    cell.set_style_bg_color(
+        lv.color_hex(CARD_ACTIVE if key == _selected_key else CARD_BG), 0)
+    cell.set_style_bg_opa(255, 0)
+    cell.set_style_radius(6, 0)
+    cell.set_style_border_width(0, 0)
+    cell.set_style_shadow_width(0, 0)
+    cell.set_style_pad_all(2, 0)
+
+    name_lbl = lv.label(cell)
+    name_lbl.set_text(_RUNTIME.lang.t(label_key))
+    name_lbl.add_style(make_back_bar_text_style(fonts.small), 0)
+    name_lbl.align(lv.ALIGN.TOP_MID, 0, 0)
+
+    val_lbl = lv.label(cell)
+    val_lbl.set_text(str(_thresh_values.get(key, dflt)))
+    val_lbl.add_style(make_back_bar_text_style(fonts.body), 0)
+    val_lbl.align(lv.ALIGN.BOTTOM_MID, 0, 0)
+    _thresh_labels[key] = val_lbl
+
+    def _on_click(e, _k=key):
+        if e.get_code() == lv.EVENT.CLICKED:
+            _select_cell(_k)
+    cell.add_event(_on_click, lv.EVENT.CLICKED, None)
+    _thresh_cells[key] = cell
+    return cell
+
+
+def _refresh_table():
+    """刷新左表 3 槽采色历史(LAB 值;底色留待板端用 cell style 调)。"""
+    if _table is None:
+        return
+    header = ["L", "A", "B"]
+    for col in range(3):
+        try:
+            _table.set_cell_value(0, col, header[col])
+        except Exception:
+            pass
+    for i in range(3):
+        entry = _swatch[i]
+        for col in range(3):
+            try:
+                if entry is not None:
+                    lab = entry[0]
+                    _table.set_cell_value(i + 1, col, str(lab[col]))
+                else:
+                    _table.set_cell_value(i + 1, col, "-")
+            except Exception:
+                pass
+
+
+def _on_preview_clicked(e):
+    """点预览区取色:记录屏幕坐标(VGA 空间)。"""
+    global _pending_click
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    if _overlay is not None:
+        global _close_overlay
+        _close_overlay = True
+        return
+    try:
+        p = lv.indev_get_act().get_point()
+        _pending_click = (p.x, p.y)
+    except Exception:
+        pass
+
+
+def _on_list_clicked(e):
+    """弹出清除/保存浮层(对齐 tag_detect)。"""
+    global _overlay, _clear_btn, _save_btn
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    if _overlay is not None:
+        return
+    from ui.theme import make_back_bar_text_style
+    _overlay = lv.obj(lv.scr_act())
+    _overlay.set_size(lv.pct(100), BAR_H)
+    _overlay.set_pos(0, PREVIEW_Y + PREVIEW_H - BAR_H)
+    _overlay.set_style_bg_color(lv.color_hex(BAR_BG), 0)
+    _overlay.set_style_bg_opa(255, 0)
+    _overlay.set_style_border_width(0, 0)
+    _overlay.set_style_pad_all(0, 0)
+    _overlay.set_style_radius(0, 0)
+    _overlay.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    _overlay.add_flag(lv.obj.FLAG.CLICKABLE)
+    _overlay.add_event(_on_overlay_clicked, lv.EVENT.CLICKED, None)
+
+    _clear_btn = lv.btn(_overlay)
+    _clear_btn.set_size(120, 40)
+    _clear_btn.align(lv.ALIGN.LEFT_MID, 20, 0)
+    cl = lv.label(_clear_btn)
+    cl.set_text(_RUNTIME.lang.t("color_detect.clear"))
+    cl.add_style(make_back_bar_text_style(fonts.body), 0)
+    cl.center()
+    _clear_btn.add_event(_on_clear_clicked, lv.EVENT.CLICKED, None)
+
+    _save_btn = lv.btn(_overlay)
+    _save_btn.set_size(120, 40)
+    _save_btn.align(lv.ALIGN.RIGHT_MID, -20, 0)
+    sv = lv.label(_save_btn)
+    sv.set_text(_RUNTIME.lang.t("color_detect.save"))
+    sv.add_style(make_back_bar_text_style(fonts.body), 0)
+    sv.center()
+    _save_btn.add_event(_on_save_clicked, lv.EVENT.CLICKED, None)
+
+
+def _on_overlay_clicked(e):
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _close_overlay = True
+
+
+def _on_clear_clicked(e):
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _color_db.clear()
+    _refresh_count()
+    if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+        _RUNTIME.buzzer.beep(ms=200)
+    _close_overlay = True
+
+
+def _on_save_clicked(e):
+    global _close_overlay
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _close_overlay = True
+
+
+def _process_overlay_close():
+    global _overlay, _clear_btn, _save_btn, _close_overlay
+    if not _close_overlay:
+        return
+    _close_overlay = False
+    for obj in (_clear_btn, _save_btn, _overlay):
+        if obj is not None:
+            try:
+                obj.delete()
+            except Exception:
+                pass
+    _clear_btn = None
+    _save_btn = None
+    _overlay = None
+
+
+def _refresh_count():
+    if _count_label is not None and _RUNTIME is not None:
+        try:
+            _count_label.set_text(
+                _RUNTIME.lang.t("color_detect.registered", _color_db.count))
+        except Exception:
+            pass
+
+
+def _build_ui(runtime, exit_flag):
+    """顶栏(返回+标题) + 左表 + 透明预览(可取色) + 底栏(list+6格+滑块+计数)。"""
+    global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
+    screen = lv.scr_act()
+    screen.set_style_bg_opa(0, 0)
+    screen.add_flag(lv.obj.FLAG.CLICKABLE)
+    _screen = screen
+
+    # 顶栏
+    _top_bar = lv.obj(screen)
+    _top_bar.set_size(lv.pct(100), BAR_H)
+    _top_bar.set_pos(0, 0)
+    _top_bar.set_style_bg_color(lv.color_hex(BAR_BG), 0)
+    _top_bar.set_style_bg_opa(255, 0)
+    _top_bar.set_style_border_width(0, 0)
+    _top_bar.set_style_pad_all(0, 0)
+    _top_bar.set_style_radius(0, 0)
+    _top_bar.clear_flag(lv.obj.FLAG.SCROLLABLE)
+
+    btn = lv.obj(_top_bar)
+    btn.set_size(48, 48)
+    btn.align(lv.ALIGN.LEFT_MID, 2, 0)
+    btn.set_style_bg_opa(0, 0)
+    btn.set_style_border_width(0, 0)
+    btn.set_style_shadow_width(0, 0)
+    btn.set_style_outline_width(0, 0)
+    btn.set_style_outline_opa(0, 0)
+    btn.set_style_pad_all(0, 0)
+    btn.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    btn.add_flag(lv.obj.FLAG.CLICKABLE)
+    icon_data, icon_dsc = icon_cache.get_color_icon("back")
+    if icon_dsc is not None and icon_data is not None:
+        import struct
+        w = h = 64
+        if len(icon_data) >= 24:
+            w = struct.unpack('>I', icon_data[16:20])[0]
+            h = struct.unpack('>I', icon_data[20:24])[0]
+        target = int(48 * 0.85)
+        zoom = int(min(target / w, target / h) * 256) if w > 0 and h > 0 else 256
+        zoom = max(8, min(zoom, 256))
+        icon_img = lv.img(btn)
+        icon_img.set_src(icon_dsc)
+        icon_img.set_zoom(zoom)
+        icon_img.center()
+    else:
+        lbl = lv.label(btn)
+        lbl.set_text("<")
+        lbl.center()
+
+    def _on_back(e):
+        if e.get_code() == lv.EVENT.CLICKED:
+            exit_flag[0] = True
+    btn.add_event(_on_back, lv.EVENT.CLICKED, None)
+
+    title = lv.label(_top_bar)
+    title.set_text(runtime.lang.t("category.color_detect"))
+    title.align(lv.ALIGN.CENTER, 0, 0)
+    from ui.theme import make_back_bar_text_style
+    title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 左表(4×3):顶栏左下方,叠在预览区左缘
+    _table = lv.table(screen)
+    _table.set_rows(4)
+    _table.set_cols(3)
+    _table.set_size(150, 120)
+    _table.set_pos(4, BAR_H + 4)
+    _table.set_style_bg_opa(180, 0)
+    _table.set_style_border_width(1, 0)
+    _table.set_style_pad_all(2, 0)
+    _refresh_table()
+
+    # 透明预览区(透出 OSD1,可点击取色)
+    _preview = lv.obj(screen)
+    _preview.set_size(lv.pct(100), PREVIEW_H)
+    _preview.set_pos(0, PREVIEW_Y)
+    _preview.set_style_bg_opa(0, 0)
+    _preview.set_style_border_width(0, 0)
+    _preview.set_style_pad_all(0, 0)
+    _preview.set_style_radius(0, 0)
+    _preview.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    _preview.add_flag(lv.obj.FLAG.CLICKABLE)
+    _preview.add_event(_on_preview_clicked, lv.EVENT.CLICKED, None)
+
+    # 底栏:list 图标 + 6 阈值格 + 共享滑块 + 计数
+    _bottom_bar = lv.obj(screen)
+    _bottom_bar.set_size(lv.pct(100), BAR_H)
+    _bottom_bar.set_pos(0, PREVIEW_Y + PREVIEW_H)
+    _bottom_bar.set_style_bg_color(lv.color_hex(BAR_BG), 0)
+    _bottom_bar.set_style_bg_opa(255, 0)
+    _bottom_bar.set_style_border_width(0, 0)
+    _bottom_bar.set_style_pad_all(0, 0)
+    _bottom_bar.set_style_radius(0, 0)
+    _bottom_bar.clear_flag(lv.obj.FLAG.SCROLLABLE)
+
+    # list 图标(左)
+    list_btn = lv.obj(_bottom_bar)
+    list_btn.set_size(48, 48)
+    list_btn.align(lv.ALIGN.LEFT_MID, 2, 0)
+    list_btn.set_style_bg_opa(0, 0)
+    list_btn.set_style_border_width(0, 0)
+    list_btn.set_style_pad_all(0, 0)
+    list_btn.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    list_btn.add_flag(lv.obj.FLAG.CLICKABLE)
+    list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
+    list_icon_data, list_icon_dsc = icon_cache.get_color_icon("list")
+    if list_icon_dsc is not None and list_icon_data is not None:
+        import struct
+        iw = ih = 64
+        if len(list_icon_data) >= 24:
+            iw = struct.unpack('>I', list_icon_data[16:20])[0]
+            ih = struct.unpack('>I', list_icon_data[20:24])[0]
+        ltarget = int(48 * 0.85)
+        lzoom = int(min(ltarget / iw, ltarget / ih) * 256) if iw > 0 and ih > 0 else 256
+        lzoom = max(8, min(lzoom, 256))
+        list_img = lv.img(list_btn)
+        list_img.set_src(list_icon_dsc)
+        list_img.set_zoom(lzoom)
+        list_img.center()
+
+    # 6 阈值格(填底栏中段)
+    for i, (key, label_key, lo, hi, dflt) in enumerate(THRESH_CELLS):
+        _make_cell(_bottom_bar, key, label_key, lo, hi, dflt, 56 + i * 56)
+
+    # 共享滑块(右侧)
+    _slider = lv.slider(_bottom_bar)
+    _slider.set_size(60, 16)
+    _slider.align(lv.ALIGN.RIGHT_MID, -100, 0)
+    _slider.set_range(0, 100)
+    _slider.set_value(_thresh_values[_selected_key], lv.ANIM.OFF)
+    _slider.add_event(_on_slider_changed, lv.EVENT.VALUE_CHANGED, None)
+
+    # 计数(最右)
+    count_label = lv.label(_bottom_bar)
+    count_label.set_text(runtime.lang.t("color_detect.registered", 0))
+    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
+    count_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _count_label = count_label

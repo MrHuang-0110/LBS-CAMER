@@ -118,6 +118,39 @@ def test_make_threshold_negative_a_clips():
     assert Amax == -115
 
 
+def test_build_ui_creates_top_bottom_preview_table():
+    """_build_ui 必须建顶栏/底栏/预览/左表。"""
+    src = _read(APP_PATH)
+    assert "def _build_ui(" in src, "_build_ui missing"
+    assert "_top_bar" in src and "_bottom_bar" in src
+    assert "_preview" in src
+    assert "_table" in src, "left color table missing"
+    # 返回钮回调
+    assert "exit_flag[0] = True" in src
+
+
+def test_build_ui_has_6_thresh_cells_and_slider():
+    """底栏必须有 6 阈值格 + 共享滑块。"""
+    src = _read(APP_PATH)
+    assert "THRESH_CELLS" in src
+    assert "lv.slider" in src, "shared slider missing"
+    # 选中格置绿
+    assert "CARD_ACTIVE" in src
+
+
+def test_preview_clickable_for_sampling():
+    """预览/screen 必须可点击取色(CLICKED 事件设 pending_click)。"""
+    src = _read(APP_PATH)
+    assert "pending_click" in src, "pending_click sampling state missing"
+    assert "EVENT.CLICKED" in src
+
+
+def test_left_table_4rows_3cols():
+    """左表必须 4 行 3 列(首行 L/A/B 表头)。"""
+    src = _read(APP_PATH)
+    assert "set_rows(4)" in src and "set_cols(3)" in src, "table must be 4x3"
+
+
 def test_runner():
     failures = 0
     tests = [(n, f) for n, f in sorted(globals().items())
