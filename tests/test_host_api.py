@@ -193,6 +193,53 @@ def test_poll_handshake_rfind_does_not_pass_int():
         "poll_handshake must not rfind(self.FRAME_HEAD) (int crashes MicroPython); use bytes([self.FRAME_HEAD])"
 
 
+def test_color_detect_category_type_mapped():
+    """color_detect 必须映射到 TYPE_COLOR_DETECT(0x06)。
+
+    import 方式在 Windows 不可用:host_api.py 顶部 `from machine import UART`,
+    machine 模块仅 K230 板端存在 → ModuleNotFoundError。降级为 AST 契约,
+    解析 HostAPI 类体中的赋值与 CATEGORY_TYPE dict 字面量。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    # 1. TYPE_COLOR_DETECT = 0x06 赋值必须在类体中
+    color_const = None
+    cat_dict = None
+    for n in cls.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id == "TYPE_COLOR_DETECT":
+                    color_const = n.value
+                if isinstance(t, ast.Name) and t.id == "CATEGORY_TYPE":
+                    cat_dict = n.value
+    assert color_const is not None, "TYPE_COLOR_DETECT constant missing in HostAPI"
+    assert isinstance(color_const, ast.Constant) and color_const.value == 0x06, \
+        "TYPE_COLOR_DETECT must be 0x06"
+    # 2. CATEGORY_TYPE 必须是 dict 字面量,且含 color_detect -> TYPE_COLOR_DETECT
+    assert isinstance(cat_dict, ast.Dict), "CATEGORY_TYPE must be a dict literal"
+    found = False
+    for k, v in zip(cat_dict.keys, cat_dict.values):
+        if isinstance(k, ast.Constant) and k.value == "color_detect":
+            assert isinstance(v, ast.Name) and v.id == "TYPE_COLOR_DETECT", \
+                "color_detect must map to TYPE_COLOR_DETECT"
+            found = True
+    assert found, "color_detect key missing in CATEGORY_TYPE"
+
+
+def test_color_detect_i18n_keys_exist():
+    """color_detect i18n 段必须有 registered/clear/save + 6 阈值键。"""
+    import json
+    for lang in ("zh_CN", "en_US"):
+        with open(os.path.join(ROOT, "resource", "i18n", "%s.json" % lang),
+                  encoding="utf-8") as f:
+            d = json.load(f)
+        seg = d.get("color_detect", {})
+        for key in ("registered", "clear", "save",
+                    "Lmin", "Lmax", "Amin", "Amax", "Bmin", "Bmax"):
+            assert key in seg, "color_detect.%s missing in %s" % (key, lang)
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):

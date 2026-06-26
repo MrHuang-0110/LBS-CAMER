@@ -73,6 +73,17 @@
     "clear": "清除",
     "save": "保存"
   },
+  "color_detect": {
+    "registered": "已注册 %d/4",
+    "clear": "清除",
+    "save": "保存",
+    "Lmin": "L最小",
+    "Lmax": "L最大",
+    "Amin": "A最小",
+    "Amax": "A最大",
+    "Bmin": "B最小",
+    "Bmax": "B最大"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"

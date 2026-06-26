@@ -73,6 +73,17 @@
     "clear": "Clear",
     "save": "Save"
   },
+  "color_detect": {
+    "registered": "Registered %d/4",
+    "clear": "Clear",
+    "save": "Save",
+    "Lmin": "Lmin",
+    "Lmax": "Lmax",
+    "Amin": "Amin",
+    "Amax": "Amax",
+    "Bmin": "Bmin",
+    "Bmax": "Bmax"
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"
