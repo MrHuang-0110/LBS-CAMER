@@ -49,6 +49,75 @@ def test_color_detect_in_categories_enabled():
     assert c[0].get("ui_mode") == "stream"
 
 
+def _extract_func_src(path, func_name):
+    """从 app.py 抠出指定函数源码(避免 import 触发 lvgl)。"""
+    src = _read(path)
+    tree = ast.parse(src)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == func_name:
+            return ast.get_source_segment(src, node)
+    return None
+
+
+def test_rgb_to_lab_white():
+    """白色 RGB(255,255,255) → L≈100, A≈0, B≈0。"""
+    src = _extract_func_src(APP_PATH, "_rgb_to_lab")
+    assert src is not None, "_rgb_to_lab missing in app.py"
+    ns = {}
+    exec(src, ns)
+    L, A, B = ns["_rgb_to_lab"](255, 255, 255)
+    assert abs(L - 100) < 3, "white L should be ~100, got %s" % L
+    assert abs(A) < 3, "white A should be ~0, got %s" % A
+    assert abs(B) < 3, "white B should be ~0, got %s" % B
+
+
+def test_rgb_to_lab_black():
+    """黑色 RGB(0,0,0) → L≈0, A≈0, B≈0。"""
+    src = _extract_func_src(APP_PATH, "_rgb_to_lab")
+    ns = {}
+    exec(src, ns)
+    L, A, B = ns["_rgb_to_lab"](0, 0, 0)
+    assert abs(L) < 3
+    assert abs(A) < 3
+    assert abs(B) < 3
+
+
+def test_rgb_to_lab_red():
+    """红色 RGB(255,0,0) → L≈53, A≈80(红方向), B≈67(黄方向)。"""
+    src = _extract_func_src(APP_PATH, "_rgb_to_lab")
+    ns = {}
+    exec(src, ns)
+    L, A, B = ns["_rgb_to_lab"](255, 0, 0)
+    assert abs(L - 53) < 5
+    assert A > 60, "red A should be strongly positive, got %s" % A
+    assert B > 50, "red B should be positive, got %s" % B
+
+
+def test_make_threshold_applies_plus_minus_10():
+    """_make_threshold 用 ±10 容差,且裁剪到有效范围。"""
+    src = _extract_func_src(APP_PATH, "_make_threshold")
+    assert src is not None, "_make_threshold missing"
+    ns = {}
+    exec(src, ns)
+    # L=95 → Lmin=85, Lmax=100(裁剪); A=5 → -5~15; B=120 → 110~127(裁剪)
+    th = ns["_make_threshold"]((95, 5, 120))
+    Lmin, Lmax, Amin, Amax, Bmin, Bmax = th
+    assert (Lmin, Lmax) == (85, 100), "L clip fail: %s" % ((Lmin, Lmax),)
+    assert (Amin, Amax) == (-5, 15)
+    assert (Bmin, Bmax) == (110, 127), "B clip fail: %s" % ((Bmin, Bmax),)
+
+
+def test_make_threshold_negative_a_clips():
+    """A=-125 → Amin=-128(裁剪), Amax=-115。"""
+    src = _extract_func_src(APP_PATH, "_make_threshold")
+    ns = {}
+    exec(src, ns)
+    th = ns["_make_threshold"]((50, -125, 0))
+    Lmin, Lmax, Amin, Amax, Bmin, Bmax = th
+    assert Amin == -128
+    assert Amax == -115
+
+
 def test_runner():
     failures = 0
     tests = [(n, f) for n, f in sorted(globals().items())
