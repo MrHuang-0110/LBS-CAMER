@@ -168,6 +168,8 @@ class AppRuntime:
             icon_cache.preload_camera_icons()
         elif category_id == "face_detect":
             icon_cache.preload_face_icons()
+        elif category_id == "tag_detect":
+            icon_cache.preload_tag_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -180,6 +182,10 @@ class AppRuntime:
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "camera":
             chs.append((CAM_CHN_ID_1, Sensor.SXGAM, Sensor.RGB565))
+        elif category_id == "tag_detect":
+            # chn1 QVGA RGB565 专做检测（官方 AprilTag/QR demo 同款）；
+            # chn0 VGA RGB888 显示。rect ×2 映射显示（QVGA→VGA 整数缩放）。
+            chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs
