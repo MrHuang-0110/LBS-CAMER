@@ -87,20 +87,28 @@ class ObjectDetectionApp(AIBase):
             scores_ori = output_data[:, 4:]
             confs_ori = np.max(scores_ori, axis=-1)
             inds_ori = np.argmax(scores_ori, axis=-1)
+
+            # 向量化预算所有候选的 lbrt(8400 行一次性算),避免在 Python 循环里逐个做浮点。
+            # ulab 不支持 fancy indexing(arr[mask]),故仍用 Python 循环筛选,但循环体
+            # 只做"过阈则取预算值"的轻量取值,不再逐个算 xywh->lbrt 浮点。
+            # ⚠️ ulab ndarray 无 .astype() ,int 转换在取值时用 int() 完成。
+            xs = boxes_ori[:, 0]
+            ys = boxes_ori[:, 1]
+            ws = boxes_ori[:, 2]
+            hs = boxes_ori[:, 3]
+            lefts = (xs - 0.5 * ws) * self.x_factor
+            tops = (ys - 0.5 * hs) * self.y_factor
+            rights = (xs + 0.5 * ws) * self.x_factor
+            bottoms = (ys + 0.5 * hs) * self.y_factor
+
             boxes, scores, inds = [], [], []
-            for i in range(len(boxes_ori)):
+            n = len(confs_ori)
+            for i in range(n):
                 if confs_ori[i] > self.confidence_threshold:
                     scores.append(confs_ori[i])
                     inds.append(inds_ori[i])
-                    x = boxes_ori[i, 0]
-                    y = boxes_ori[i, 1]
-                    w = boxes_ori[i, 2]
-                    h = boxes_ori[i, 3]
-                    left = int((x - 0.5 * w) * self.x_factor)
-                    top = int((y - 0.5 * h) * self.y_factor)
-                    right = int((x + 0.5 * w) * self.x_factor)
-                    bottom = int((y + 0.5 * h) * self.y_factor)
-                    boxes.append([left, top, right, bottom])
+                    boxes.append([int(lefts[i]), int(tops[i]),
+                                  int(rights[i]), int(bottoms[i])])
             if len(boxes) == 0:
                 return []
             boxes = np.array(boxes)

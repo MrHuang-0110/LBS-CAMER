@@ -67,7 +67,7 @@ def _init_ai():
     print("[object_detect] loading det kmodel...")
     _object_det = ObjectDetectionApp(
         KMODEL_PATH, labels=COCO_LABELS, model_input_size=[320, 320],
-        max_boxes_num=50, confidence_threshold=0.2, nms_threshold=0.2,
+        max_boxes_num=20, confidence_threshold=0.5, nms_threshold=0.2,
         rgb888p_size=[RGB888P_W, RGB888P_H], display_size=[DISPLAY_W, DISPLAY_H],
         debug_mode=0)
     _object_det.config_preprocess()
