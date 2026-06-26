@@ -155,7 +155,7 @@ def on_frame(img):
 def _refresh_count():
     if _count_label is not None:
         try:
-            _count_label.set_text("已注册 %d/4" % len(_db_features))
+            _count_label.set_text(_RUNTIME.lang.t("face_detect.registered", len(_db_features)))
         except Exception:
             pass
 
@@ -184,7 +184,7 @@ def _on_list_clicked(e):
     _clear_btn.set_size(120, 40)
     _clear_btn.align(lv.ALIGN.LEFT_MID, 20, 0)
     cl = lv.label(_clear_btn)
-    cl.set_text("清除")
+    cl.set_text(_RUNTIME.lang.t("face_detect.clear"))
     cl.add_style(make_back_bar_text_style(fonts.body), 0)
     cl.center()
     _clear_btn.add_event(_on_clear_clicked, lv.EVENT.CLICKED, None)
@@ -193,7 +193,7 @@ def _on_list_clicked(e):
     _save_btn.set_size(120, 40)
     _save_btn.align(lv.ALIGN.RIGHT_MID, -20, 0)
     sv = lv.label(_save_btn)
-    sv.set_text("保存")
+    sv.set_text(_RUNTIME.lang.t("face_detect.save"))
     sv.add_style(make_back_bar_text_style(fonts.body), 0)
     sv.center()
     _save_btn.add_event(_on_save_clicked, lv.EVENT.CLICKED, None)
@@ -367,7 +367,7 @@ def _build_ui(runtime, exit_flag):
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
     count_label = lv.label(_bottom_bar)
-    count_label.set_text("已注册 %d/4" % len(_db_features))
+    count_label.set_text(runtime.lang.t("face_detect.registered", len(_db_features)))
     count_label.add_style(make_back_bar_text_style(fonts.body), 0)
     count_label.align(lv.ALIGN.CENTER, 0, 0)
     _count_label = count_label

@@ -56,7 +56,7 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Registered",
+    "registered": "Registered %d/4",
     "press_k2": "Press K2 to register",
     "back_fb": "<",
     "list_fb": "="
