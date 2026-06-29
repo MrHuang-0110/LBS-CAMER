@@ -650,8 +650,10 @@ def on_frame(img):
     # 居中绿色十字(对齐 tag_detect)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
-    # KEY2 注册:pending 且当前帧有当前色 blob -> 注册当前阈值到 4 槽
-    if _id_registry is not None and _id_registry.has_pending() and rect is not None:
+    # KEY2 注册:pending 即注册当前 6 阈值到 4 槽。
+    # ⚠️ 不依赖当前帧 find_blobs 命中(rect)——颜色阈值本身就是特征,
+    # 用户取色/调滑块设好阈值后按 KEY2 就该注册,无需画面里此刻有色块。
+    if _id_registry is not None and _id_registry.has_pending():
         lab_mid = ((cur_th[0] + cur_th[1]) // 2,
                    (cur_th[2] + cur_th[3]) // 2,
                    (cur_th[4] + cur_th[5]) // 2)
@@ -661,6 +663,9 @@ def on_frame(img):
             registrar=lambda th: _color_db.register(th, rgb=latest_rgb))
         if slot is not None:
             _refresh_count()
+            print("[color_detect] registered -> ID%d (lab=%r)" % (slot, lab_mid))
+        else:
+            print("[color_detect] KEY2 pending but register returned None")
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
