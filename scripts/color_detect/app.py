@@ -184,7 +184,7 @@ def _make_cell(parent, key, label_key, lo, hi, dflt, align_x):
 
     name_lbl = lv.label(cell)
     name_lbl.set_text(_RUNTIME.lang.t(label_key))
-    name_lbl.add_style(make_back_bar_text_style(fonts.small), 0)
+    name_lbl.add_style(make_back_bar_text_style(fonts.caption), 0)
     name_lbl.align(lv.ALIGN.TOP_MID, 0, 0)
 
     val_lbl = lv.label(cell)
