@@ -466,3 +466,191 @@ def _build_ui(runtime, exit_flag):
     count_label.add_style(make_back_bar_text_style(fonts.body), 0)
     count_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
     _count_label = count_label
+
+
+def _current_threshold_tuple():
+    """从 _thresh_values 取当前 6 阈值 tuple。"""
+    return (_thresh_values["Lmin"], _thresh_values["Lmax"],
+            _thresh_values["Amin"], _thresh_values["Amax"],
+            _thresh_values["Bmin"], _thresh_values["Bmax"])
+
+
+def _apply_sample(lab, rgb):
+    """采样色套用 ±10 阈值 -> 更新 6 格数值 + 滑块;压入左表 3 槽循环。"""
+    global _swatch
+    th = _make_threshold(lab)
+    _thresh_values["Lmin"] = th[0]
+    _thresh_values["Lmax"] = th[1]
+    _thresh_values["Amin"] = th[2]
+    _thresh_values["Amax"] = th[3]
+    _thresh_values["Bmin"] = th[4]
+    _thresh_values["Bmax"] = th[5]
+    # 刷新 6 格数值标签
+    for key in _thresh_labels:
+        lbl = _thresh_labels[key]
+        if lbl is not None:
+            try:
+                lbl.set_text(str(_thresh_values[key]))
+            except Exception:
+                pass
+    # 同步滑块到选中格
+    if _slider is not None:
+        for k, _label, lo, hi, _dflt in THRESH_CELLS:
+            if k == _selected_key:
+                _slider.set_range(lo, hi)
+                _slider.set_value(_thresh_values[_selected_key], lv.ANIM.OFF)
+                break
+    # 压入左表 3 槽循环(覆盖最旧:0->1->2->0)
+    _swatch = [_swatch[1], _swatch[2], (lab, rgb)]
+    _refresh_table()
+
+
+def _find_largest_blob(img_det, th):
+    """find_blobs 取最大 blob(rect [x,y,w,h] in QVGA),无返回 None。"""
+    try:
+        blobs = img_det.find_blobs([th], pixels_threshold=30,
+                                   area_threshold=30, merge=True)
+    except Exception as e:
+        print("[color_detect] find_blobs error: %s" % e)
+        return None
+    if not blobs:
+        return None
+    best = max(blobs, key=lambda b: b.pixels())
+    return best.rect()  # [x, y, w, h]
+
+
+def on_frame(img):
+    """chn1 find_blobs 检测 -> 当前色白框 + 注册色彩色ID框 -> chn0 画框 -> host_tick。"""
+    if _RUNTIME is None:
+        return
+    img_det = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_1)
+    slots = [None, None, None, None]
+    cur_th = _current_threshold_tuple()
+
+    # 处理 pending_click 取色(在 chn0 VGA img 上 get_pixel)
+    global _pending_click
+    if _pending_click is not None:
+        cx, cy = _pending_click
+        _pending_click = None
+        try:
+            pixel = img.get_pixel(cx, cy)
+            # get_pixel 返回 (R,G,B) 或单值,按 RGB888 处理
+            if isinstance(pixel, (tuple, list)):
+                r, g, b = pixel[0], pixel[1], pixel[2]
+            else:
+                r = g = b = pixel
+            lab = _rgb_to_lab(r, g, b)
+            rgb_hex = ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
+            _apply_sample(lab, rgb_hex)
+            cur_th = _current_threshold_tuple()
+        except Exception as e:
+            print("[color_detect] sample error: %s" % e)
+
+    # 当前色检测 -> 白框(未注册)
+    rect = _find_largest_blob(img_det, cur_th)
+    if rect is not None:
+        x, y, w, h = [int(v) for v in rect]
+        color = _draw_color(BOX_UNKNOWN)
+        img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
+                           w * DET_SCALE, h * DET_SCALE,
+                           color=color, thickness=2)
+
+    # 注册色检测 -> 彩色 ID 框 + 填 slots
+    for slot, entry in enumerate(_color_db.iter_slots(), start=1):
+        r2 = _find_largest_blob(img_det, entry['threshold'])
+        if r2 is not None:
+            x, y, w, h = [int(v) for v in r2]
+            box_color = BOX_COLORS.get(slot, BOX_UNKNOWN)
+            color = _draw_color(box_color)
+            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
+                               w * DET_SCALE, h * DET_SCALE,
+                               color=color, thickness=4)
+            img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
+                                     "ID%d" % slot, color=color)
+            slots[slot - 1] = (slot, x * DET_SCALE, y * DET_SCALE,
+                               w * DET_SCALE, h * DET_SCALE, 100)
+
+    # 居中绿色十字(对齐 tag_detect)
+    img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+
+    # KEY2 注册:pending 且当前帧有当前色 blob -> 注册当前阈值到 4 槽
+    if _id_registry is not None and _id_registry.has_pending() and rect is not None:
+        lab_mid = ((cur_th[0] + cur_th[1]) // 2,
+                   (cur_th[2] + cur_th[3]) // 2,
+                   (cur_th[4] + cur_th[5]) // 2)
+        latest_rgb = _swatch[2][1] if _swatch[2] is not None else 0xFFFFFF
+        slot = _id_registry.try_register(
+            (cur_th, lab_mid), _RUNTIME.buzzer,
+            registrar=lambda th: _color_db.register(th, rgb=latest_rgb))
+        if slot is not None:
+            _refresh_count()
+
+    if _RUNTIME is not None and _RUNTIME.host is not None:
+        _RUNTIME.host_tick(slots)
+
+
+def _destroy_ui():
+    global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
+    global _overlay, _clear_btn, _save_btn
+    for obj in (_clear_btn, _save_btn, _overlay, _slider, _table,
+                _top_bar, _bottom_bar, _preview, _count_label):
+        if obj is not None:
+            try:
+                obj.delete()
+            except Exception:
+                pass
+    _clear_btn = None
+    _save_btn = None
+    _overlay = None
+    _slider = None
+    _table = None
+    _top_bar = None
+    _bottom_bar = None
+    _preview = None
+    _count_label = None
+    _thresh_labels.clear()
+    _thresh_cells.clear()
+    try:
+        from ui.theme import Colors
+        scr = lv.scr_act()
+        scr.set_style_bg_color(lv.color_hex(Colors.BG), 0)
+        scr.set_style_bg_opa(255, 0)
+    except Exception:
+        pass
+    _screen = None
+
+
+def run(runtime):
+    """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
+    global _RUNTIME, _color_db
+    _RUNTIME = runtime
+    _color_db = ColorDB()
+    exit_flag = [False]
+    _init_registry(runtime.fpioa)
+    _build_ui(runtime, exit_flag)
+    fc = 0
+    try:
+        while not exit_flag[0]:
+            os.exitpoint()
+            img = runtime.sensor.snapshot(chn=CAM_CHN_ID_0)
+            try:
+                on_frame(img)
+            except Exception as e:
+                print("[color_detect] on_frame error: %s" % e)
+                try:
+                    sys.print_exception(e)
+                except Exception:
+                    pass
+            if _id_registry is not None:
+                _id_registry.poll_k2()
+            _process_overlay_close()
+            Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+            time.sleep_ms(lv.task_handler())
+            fc += 1
+            if fc % 30 == 0:
+                print("[color_detect] fc=%d" % fc)
+    finally:
+        _destroy_ui()
+        if _color_db is not None:
+            _color_db.flush_to_disk()
+        _RUNTIME = None

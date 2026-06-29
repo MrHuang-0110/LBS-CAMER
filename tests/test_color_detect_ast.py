@@ -151,6 +151,66 @@ def test_left_table_4rows_3cols():
     assert "set_rows(4)" in src and "set_cols(3)" in src, "table must be 4x3"
 
 
+def test_on_frame_uses_find_blobs():
+    """on_frame 必须用 find_blobs 检测。"""
+    src = _read(APP_PATH)
+    assert "find_blobs" in src
+
+
+def test_on_frame_calls_host_tick():
+    """on_frame 必须调 host_tick(slots)。"""
+    src = _read(APP_PATH)
+    assert "host_tick" in src
+
+
+def test_on_frame_handles_pending_click():
+    """on_frame 必须处理 _pending_click(get_pixel + RGB->LAB + 套阈值)。"""
+    src = _read(APP_PATH)
+    assert "_pending_click" in src
+    assert "get_pixel" in src
+    assert "_rgb_to_lab" in src
+    assert "_make_threshold" in src
+
+
+def test_on_frame_key2_register():
+    """on_frame 必须处理 KEY2 注册当前阈值到 ColorDB。"""
+    src = _read(APP_PATH)
+    assert "try_register" in src
+    assert "_color_db.register" in src or "color_db.register" in src
+
+
+def test_run_has_exit_flag_loop():
+    """run() 主循环必须用 exit_flag + snapshot + show OSD1 + task_handler。"""
+    src = _read(APP_PATH)
+    assert "def run(" in src
+    assert "exit_flag" in src
+    assert "snapshot" in src
+    assert "LAYER_OSD1" in src
+    assert "task_handler" in src
+
+
+def test_on_frame_isolated_by_try_except():
+    """on_frame 调用必须被 try/except 包裹。"""
+    src = _read(APP_PATH)
+    assert "on_frame(img)" in src
+    assert "except" in src
+
+
+def test_destroy_ui_restores_screen():
+    """_destroy_ui 必须删 UI + 恢复 bg_opa=255。"""
+    src = _read(APP_PATH)
+    assert "def _destroy_ui(" in src
+    assert "bg_opa(255" in src
+
+
+def test_crosshair_drawn():
+    """on_frame 必须画居中绿色十字。"""
+    src = _read(APP_PATH)
+    assert "draw_cross" in src
+    compact = src.replace(" ", "")
+    assert "320,240" in compact
+
+
 def test_runner():
     failures = 0
     tests = [(n, f) for n, f in sorted(globals().items())
