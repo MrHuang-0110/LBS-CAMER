@@ -592,29 +592,29 @@ def on_frame(img):
     slots = [None, None, None, None]
     cur_th = _current_threshold_tuple()
 
-    # 处理 pending_click 取色(在 chn0 VGA img 上 get_pixel)
+    # 处理 pending_click 取色。
+    # ⚠️ K230 MicroPython 的 image.get_pixel 对 chn0 RGB888 snapshot 返回 None
+    # (板端实测:合法坐标 640x480 仍返回 None,该绑定版本未实现)。
+    # 改用 chn1 RGB565 img_det 取色 —— RGB565 是 find_blobs 依赖的格式,get_pixel
+    # 在其上有效。触摸坐标是 VGA 空间,÷ DET_SCALE(2) 转回 QVGA。
     global _pending_click
     if _pending_click is not None:
         cx, cy = _pending_click
         _pending_click = None
         try:
-            # 坐标裁剪到 image 范围(防越界致 get_pixel 返回 None)
-            iw, ih = img.width(), img.height()
-            cx = max(0, min(cx, iw - 1))
-            cy = max(0, min(cy, ih - 1))
-            pixel = img.get_pixel(cx, cy)
-            # get_pixel 返回类型因绑定版本/格式而异:
-            #   RGB888 -> (R,G,B) tuple;GRAYSCALE -> int;异常/不支持 -> None
+            qx = max(0, min(cx // DET_SCALE, img_det.width() - 1))
+            qy = max(0, min(cy // DET_SCALE, img_det.height() - 1))
+            pixel = img_det.get_pixel(qx, qy)
             if isinstance(pixel, (tuple, list)):
                 r, g, b = int(pixel[0]), int(pixel[1]), int(pixel[2])
             elif isinstance(pixel, int):
-                # 打包 RGB int:(R<<16)|(G<<8)|B
-                r = (pixel >> 16) & 0xFF
-                g = (pixel >> 8) & 0xFF
-                b = pixel & 0xFF
+                # RGB565 打包:(R<<11)|(G<<5)|B, 5/6/5 位 → 扩展到 8 位
+                r = ((pixel >> 11) & 0x1F) << 3
+                g = ((pixel >> 5) & 0x3F) << 2
+                b = (pixel & 0x1F) << 3
             else:
-                print("[color_detect] get_pixel returned %r at (%d,%d) img=%dx%d"
-                      % (pixel, cx, cy, iw, ih))
+                print("[color_detect] get_pixel(565) returned %r at (%d,%d)"
+                      % (pixel, qx, qy))
                 raise ValueError("get_pixel returned %r" % type(pixel))
             lab = _rgb_to_lab(r, g, b)
             rgb_hex = ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
