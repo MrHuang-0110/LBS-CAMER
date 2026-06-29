@@ -391,8 +391,8 @@ def _build_ui(runtime, exit_flag):
 
     # 左表(4×3):顶栏左下方,叠在预览区左缘
     _table = lv.table(screen)
-    _table.set_rows(4)
-    _table.set_cols(3)
+    _table.set_row_cnt(4)
+    _table.set_col_cnt(3)
     _table.set_size(150, 120)
     _table.set_pos(4, BAR_H + 4)
     _table.set_style_bg_opa(180, 0)

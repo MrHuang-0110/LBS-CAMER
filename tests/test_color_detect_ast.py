@@ -148,7 +148,8 @@ def test_preview_clickable_for_sampling():
 def test_left_table_4rows_3cols():
     """左表必须 4 行 3 列(首行 L/A/B 表头)。"""
     src = _read(APP_PATH)
-    assert "set_rows(4)" in src and "set_cols(3)" in src, "table must be 4x3"
+    # LVGL v8 MicroPython 绑定:lv.table 用 set_row_cnt/set_col_cnt(非 set_rows/set_cols)
+    assert "set_row_cnt(4)" in src and "set_col_cnt(3)" in src, "table must be 4x3"
 
 
 def test_on_frame_uses_find_blobs():
