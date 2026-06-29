@@ -598,12 +598,24 @@ def on_frame(img):
         cx, cy = _pending_click
         _pending_click = None
         try:
+            # 坐标裁剪到 image 范围(防越界致 get_pixel 返回 None)
+            iw, ih = img.width(), img.height()
+            cx = max(0, min(cx, iw - 1))
+            cy = max(0, min(cy, ih - 1))
             pixel = img.get_pixel(cx, cy)
-            # get_pixel 返回 (R,G,B) 或单值,按 RGB888 处理
+            # get_pixel 返回类型因绑定版本/格式而异:
+            #   RGB888 -> (R,G,B) tuple;GRAYSCALE -> int;异常/不支持 -> None
             if isinstance(pixel, (tuple, list)):
-                r, g, b = pixel[0], pixel[1], pixel[2]
+                r, g, b = int(pixel[0]), int(pixel[1]), int(pixel[2])
+            elif isinstance(pixel, int):
+                # 打包 RGB int:(R<<16)|(G<<8)|B
+                r = (pixel >> 16) & 0xFF
+                g = (pixel >> 8) & 0xFF
+                b = pixel & 0xFF
             else:
-                r = g = b = pixel
+                print("[color_detect] get_pixel returned %r at (%d,%d) img=%dx%d"
+                      % (pixel, cx, cy, iw, ih))
+                raise ValueError("get_pixel returned %r" % type(pixel))
             lab = _rgb_to_lab(r, g, b)
             rgb_hex = ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF)
             _apply_sample(lab, rgb_hex)
