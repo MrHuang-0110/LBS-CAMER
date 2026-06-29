@@ -40,14 +40,15 @@ BOX_COLORS = {
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
 
-# 6 阈值格定义:(key, label_key, lo, hi, default)
+# 6 阈值格定义:(key, 显示文本, lo, hi, default)。标签用短英文(Lmin/Lmax/...),
+# 通用缩写不走 i18n,3 字母在 52px 格内可读。
 THRESH_CELLS = [
-    ("Lmin", "color_detect.Lmin", 0, 100, 0),
-    ("Lmax", "color_detect.Lmax", 0, 100, 100),
-    ("Amin", "color_detect.Amin", -128, 127, -10),
-    ("Amax", "color_detect.Amax", -128, 127, 10),
-    ("Bmin", "color_detect.Bmin", -128, 127, -10),
-    ("Bmax", "color_detect.Bmax", -128, 127, 10),
+    ("Lmin", "Lmin", 0, 100, 0),
+    ("Lmax", "Lmax", 0, 100, 100),
+    ("Amin", "Amin", -128, 127, -10),
+    ("Amax", "Amax", -128, 127, 10),
+    ("Bmin", "Bmin", -128, 127, -10),
+    ("Bmax", "Bmax", -128, 127, 10),
 ]
 
 
@@ -110,7 +111,9 @@ _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_table = None          # 左表 4×3
+_table = None          # 左表容器(自建 4×3 网格,非 lv.table)
+_table_cells = {}      # {(row,col): label_obj} 12 格标签
+_table_rows = [None, None, None]  # 3 个采色行容器(供设底色)
 _count_label = None
 _id_registry = None
 _color_db = None
@@ -168,22 +171,23 @@ def _on_slider_changed(e):
             pass
 
 
-def _make_cell(parent, key, label_key, lo, hi, dflt, align_x):
-    """建一个阈值格(可点选)+ 数值标签。"""
+def _make_cell(parent, key, label_text, lo, hi, dflt, align_x, cell_w):
+    """建一个阈值格(可点选)+ 数值标签。label_text 为直接显示文本(短英文)。"""
     from ui.theme import make_back_bar_text_style
     cell = lv.btn(parent)
-    cell.set_size(52, 44)
+    cell.set_size(cell_w, 44)
     cell.align(lv.ALIGN.LEFT_MID, align_x, 0)
     cell.set_style_bg_color(
         lv.color_hex(CARD_ACTIVE if key == _selected_key else CARD_BG), 0)
     cell.set_style_bg_opa(255, 0)
+    cell.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
     cell.set_style_radius(6, 0)
     cell.set_style_border_width(0, 0)
     cell.set_style_shadow_width(0, 0)
     cell.set_style_pad_all(2, 0)
 
     name_lbl = lv.label(cell)
-    name_lbl.set_text(_RUNTIME.lang.t(label_key))
+    name_lbl.set_text(label_text)
     name_lbl.add_style(make_back_bar_text_style(fonts.caption), 0)
     name_lbl.align(lv.ALIGN.TOP_MID, 0, 0)
 
@@ -202,24 +206,41 @@ def _make_cell(parent, key, label_key, lo, hi, dflt, align_x):
 
 
 def _refresh_table():
-    """刷新左表 3 槽采色历史(LAB 值;底色留待板端用 cell style 调)。"""
+    """刷新左表(自建 4×3 网格):表头 L/A/B + 3 行采色历史(底色=采样 RGB)。"""
     if _table is None:
         return
-    header = ["L", "A", "B"]
+    # 表头行(0):L / A / B
     for col in range(3):
-        try:
-            _table.set_cell_value(0, col, header[col])
-        except Exception:
-            pass
+        lbl = _table_cells.get((0, col))
+        if lbl is not None:
+            try:
+                lbl.set_text(["L", "A", "B"][col])
+            except Exception:
+                pass
+    # 采色历史 3 行(1-3):每行底色=采样 RGB,文字=LAB 三值
     for i in range(3):
         entry = _swatch[i]
-        for col in range(3):
+        row_obj = _table_rows[i]
+        if row_obj is not None:
             try:
                 if entry is not None:
-                    lab = entry[0]
-                    _table.set_cell_value(i + 1, col, str(lab[col]))
+                    rgb = entry[1]
+                    row_obj.set_style_bg_color(lv.color_hex(rgb), 0)
+                    row_obj.set_style_bg_opa(255, 0)
                 else:
-                    _table.set_cell_value(i + 1, col, "-")
+                    row_obj.set_style_bg_color(lv.color_hex(0x222222), 0)
+                    row_obj.set_style_bg_opa(180, 0)
+            except Exception:
+                pass
+        for col in range(3):
+            lbl = _table_cells.get((i + 1, col))
+            if lbl is None:
+                continue
+            try:
+                if entry is not None:
+                    lbl.set_text(str(entry[0][col]))
+                else:
+                    lbl.set_text("-")
             except Exception:
                 pass
 
@@ -389,20 +410,54 @@ def _build_ui(runtime, exit_flag):
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
 
-    # 左表(4×3):顶栏左下方,叠在预览区左缘
-    _table = lv.table(screen)
-    _table.set_row_cnt(4)
-    _table.set_col_cnt(3)
-    _table.set_size(150, 120)
-    _table.set_pos(4, BAR_H + 4)
-    _table.set_style_bg_opa(180, 0)
+    # 左表(自建 4×3 网格,非 lv.table):顶栏左下方,叠在预览区左缘。
+    # 用 obj 网格而非 lv.table —— table cell 默认白底+选中外框不可控,
+    # 且无法按行设底色(采样色)。网格每行一个 obj 容器,底色=采样 RGB。
+    _TABLE_X = 4
+    _TABLE_Y = BAR_H + 4
+    _TABLE_W = 150
+    _ROW_H = 26
+    _table = lv.obj(screen)
+    _table.set_size(_TABLE_W, _ROW_H * 4)
+    _table.set_pos(_TABLE_X, _TABLE_Y)
+    _table.set_style_bg_opa(0, 0)
     _table.set_style_border_width(1, 0)
+    _table.set_style_border_color(lv.color_hex(0x444444), 0)
     _table.set_style_pad_all(2, 0)
+    _table.set_style_radius(0, 0)
+    _table.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    _table.clear_flag(lv.obj.FLAG.CLICKABLE)
+    _table_cells.clear()
+    col_w = (_TABLE_W - 4) // 3
+    for r in range(4):
+        if r == 0:
+            row_obj = _table  # 表头行用容器本身背景(透明)
+            row_obj.set_style_bg_color(lv.color_hex(0x333333), 0)
+            row_obj.set_style_bg_opa(200, 0)
+        else:
+            row_obj = lv.obj(_table)
+            row_obj.set_size(_TABLE_W - 4, _ROW_H)
+            row_obj.set_pos(0, r * _ROW_H)
+            row_obj.set_style_bg_color(lv.color_hex(0x222222), 0)
+            row_obj.set_style_bg_opa(180, 0)
+            row_obj.set_style_border_width(0, 0)
+            row_obj.set_style_pad_all(0, 0)
+            row_obj.set_style_radius(0, 0)
+            row_obj.clear_flag(lv.obj.FLAG.SCROLLABLE)
+            row_obj.clear_flag(lv.obj.FLAG.CLICKABLE)
+            _table_rows[r - 1] = row_obj
+        for c in range(3):
+            cell_lbl = lv.label(row_obj)
+            cell_lbl.set_pos(c * col_w + 2, 4)
+            cell_lbl.add_style(make_back_bar_text_style(fonts.caption), 0)
+            cell_lbl.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
+            _table_cells[(r, c)] = cell_lbl
     _refresh_table()
 
-    # 透明预览区(透出 OSD1,可点击取色)
+    # 透明预览区(透出 OSD1,可点击取色)。右侧留 40px 给竖向滑块。
+    _PREVIEW_W = 600
     _preview = lv.obj(screen)
-    _preview.set_size(lv.pct(100), PREVIEW_H)
+    _preview.set_size(_PREVIEW_W, PREVIEW_H)
     _preview.set_pos(0, PREVIEW_Y)
     _preview.set_style_bg_opa(0, 0)
     _preview.set_style_border_width(0, 0)
@@ -412,7 +467,15 @@ def _build_ui(runtime, exit_flag):
     _preview.add_flag(lv.obj.FLAG.CLICKABLE)
     _preview.add_event(_on_preview_clicked, lv.EVENT.CLICKED, None)
 
-    # 底栏:list 图标 + 6 阈值格 + 共享滑块 + 计数
+    # 共享滑块(预览区右侧,竖向):调选中阈值格的值
+    _slider = lv.slider(screen)
+    _slider.set_size(20, 300)
+    _slider.set_pos(612, 90)
+    _slider.set_range(0, 100)
+    _slider.set_value(_thresh_values[_selected_key], lv.ANIM.OFF)
+    _slider.add_event(_on_slider_changed, lv.EVENT.VALUE_CHANGED, None)
+
+    # 底栏:list 图标 + 6 阈值格铺满 + 计数(滑块已移出)
     _bottom_bar = lv.obj(screen)
     _bottom_bar.set_size(lv.pct(100), BAR_H)
     _bottom_bar.set_pos(0, PREVIEW_Y + PREVIEW_H)
@@ -448,17 +511,14 @@ def _build_ui(runtime, exit_flag):
         list_img.set_zoom(lzoom)
         list_img.center()
 
-    # 6 阈值格(填底栏中段)
-    for i, (key, label_key, lo, hi, dflt) in enumerate(THRESH_CELLS):
-        _make_cell(_bottom_bar, key, label_key, lo, hi, dflt, 56 + i * 56)
-
-    # 共享滑块(右侧)
-    _slider = lv.slider(_bottom_bar)
-    _slider.set_size(60, 16)
-    _slider.align(lv.ALIGN.RIGHT_MID, -100, 0)
-    _slider.set_range(0, 100)
-    _slider.set_value(_thresh_values[_selected_key], lv.ANIM.OFF)
-    _slider.add_event(_on_slider_changed, lv.EVENT.VALUE_CHANGED, None)
+    # 6 阈值格铺满底栏中段:list(48) 之后到计数(右~90)之间均分
+    _COUNT_W = 90
+    _cells_start = 56
+    _cells_total = 640 - _cells_start - _COUNT_W
+    _cell_w = _cells_total // 6
+    for i, (key, label_text, lo, hi, dflt) in enumerate(THRESH_CELLS):
+        _make_cell(_bottom_bar, key, label_text, lo, hi, dflt,
+                   _cells_start + i * _cell_w, _cell_w - 4)
 
     # 计数(最右)
     count_label = lv.label(_bottom_bar)
@@ -591,7 +651,7 @@ def on_frame(img):
 
 def _destroy_ui():
     global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
-    global _overlay, _clear_btn, _save_btn
+    global _overlay, _clear_btn, _save_btn, _table_rows
     for obj in (_clear_btn, _save_btn, _overlay, _slider, _table,
                 _top_bar, _bottom_bar, _preview, _count_label):
         if obj is not None:
@@ -610,6 +670,8 @@ def _destroy_ui():
     _count_label = None
     _thresh_labels.clear()
     _thresh_cells.clear()
+    _table_cells.clear()
+    _table_rows = [None, None, None]
     try:
         from ui.theme import Colors
         scr = lv.scr_act()

@@ -146,10 +146,17 @@ def test_preview_clickable_for_sampling():
 
 
 def test_left_table_4rows_3cols():
-    """左表必须 4 行 3 列(首行 L/A/B 表头)。"""
+    """左表自建 4×3 网格(非 lv.table):4 行 × 3 列,首行 L/A/B 表头。
+
+    改自建 obj 网格因 lv.table cell 白底不可控 + 无法按行设底色(采样色)。
+    断言:range(4) 行循环 + _table_cells 12 格 + 表头 ["L","A","B"]。
+    """
     src = _read(APP_PATH)
-    # LVGL v8 MicroPython 绑定:lv.table 用 set_row_cnt/set_col_cnt(非 set_rows/set_cols)
-    assert "set_row_cnt(4)" in src and "set_col_cnt(3)" in src, "table must be 4x3"
+    assert "range(4)" in src, "left table must build 4 rows"
+    assert "_table_cells" in src, "must use _table_cells grid (not lv.table)"
+    assert '["L", "A", "B"]' in src or "['L', 'A', 'B']" in src, "header row L/A/B"
+    # 不应再调用 lv.table(K230 MP 绑定 cell 样式不可控);注释提及不算
+    assert "lv.table(" not in src, "must not construct lv.table (cell bg uncontrollable)"
 
 
 def test_on_frame_uses_find_blobs():
