@@ -571,12 +571,18 @@ def _apply_sample(lab, rgb):
 
 
 def _find_largest_blob(img_det, th):
-    """find_blobs 取最大 blob(rect [x,y,w,h] in QVGA),无返回 None。"""
+    """find_blobs 取最大 blob(rect [x,y,w,h] in QVGA),无返回 None。
+
+    K230 CanMV find_blobs 的 thresholds 要求 list[list[int]],阈值元素须是
+    list 而非 tuple(传 tuple 报 'can't convert tuple to int')。对齐 demo
+    实验11:threshold 为 list,find_blobs([threshold])。
+    """
     try:
-        blobs = img_det.find_blobs([th], pixels_threshold=30,
+        th_list = [int(v) for v in th]
+        blobs = img_det.find_blobs([th_list], pixels_threshold=30,
                                    area_threshold=30, merge=True)
     except Exception as e:
-        print("[color_detect] find_blobs error: %s" % e)
+        print("[color_detect] find_blobs error: %s (th=%r)" % (e, th))
         return None
     if not blobs:
         return None
