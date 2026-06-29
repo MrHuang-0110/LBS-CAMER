@@ -74,7 +74,7 @@
     "save": "Save"
   },
   "color_detect": {
-    "registered": "Registered %d/4",
+    "registered": "Reg %d/4",
     "clear": "Clear",
     "save": "Save",
     "Lmin": "Lmin",
