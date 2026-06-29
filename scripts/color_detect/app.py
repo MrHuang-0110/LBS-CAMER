@@ -255,10 +255,15 @@ def _on_preview_clicked(e):
         _close_overlay = True
         return
     try:
-        p = lv.indev_get_act().get_point()
-        _pending_click = (p.x, p.y)
-    except Exception:
-        pass
+        # K230 MicroPython LVGL 绑定:get_point 需传入预分配 point_t 填充,
+        # 无参调用不返回 point(demo 标准用法:indev.get_point(point))。
+        indev = lv.indev_get_act()
+        if indev is not None:
+            pt = lv.point_t()
+            indev.get_point(pt)
+            _pending_click = (pt.x, pt.y)
+    except Exception as ex:
+        print("[color_detect] get_point error: %s" % ex)
 
 
 def _on_list_clicked(e):
