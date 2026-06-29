@@ -29,9 +29,10 @@ class ColorDB:
         同阈值(完全相同)不重复占槽,返回已有 slot。
         返回 slot_id(1-4)。纯内存,设 _dirty。
         """
-        # 同阈值去重:已存在则返回已有槽
+        # 同阈值去重:比较 6 阈值(threshold 的第一段),已存在则返回已有槽
+        th_in = threshold[0]
         for slot_id, entry in self._features.items():
-            if entry['threshold'] == threshold:
+            if entry['threshold'] == th_in:
                 return slot_id
         slot = None
         for i in range(1, 5):
@@ -42,7 +43,9 @@ class ColorDB:
             slot = self._next_slot
             self._next_slot = self._next_slot % 4 + 1
         th, lab = threshold
-        self._features[slot] = {'threshold': threshold, 'lab': lab, 'rgb': rgb}
+        # threshold 字段只存 6 阈值 (Lmin,Lmax,Amin,Amax,Bmin,Bmax),
+        # 中心 LAB 单独存 lab —— find_blobs 直接用 entry['threshold'] 即可。
+        self._features[slot] = {'threshold': th, 'lab': lab, 'rgb': rgb}
         self._dirty = True
         self._clear_dirty = False
         print("[ColorDB] registered lab=%r -> id%d (memory, dirty)" % (lab, slot))
@@ -50,8 +53,9 @@ class ColorDB:
 
     def match(self, threshold):
         """精确匹配 threshold(6 阈值完全相等)。返回 (slot_id, 1.0) 或 (None, 0.0)。"""
+        th_in = threshold[0]
         for slot_id, entry in self._features.items():
-            if entry['threshold'] == threshold:
+            if entry['threshold'] == th_in:
                 return slot_id, 1.0
         return None, 0.0
 

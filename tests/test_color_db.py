@@ -58,7 +58,8 @@ def test_get_slot_returns_threshold_and_meta():
     db.register(th, rgb=0xFF0000)
     entry = db.get_slot(1)
     assert entry is not None
-    assert entry['threshold'] == th
+    # threshold 字段只存 6 阈值(第一段),中心 LAB 单独存 lab —— find_blobs 直接用。
+    assert entry['threshold'] == (40,60,-10,10,-10,10)
     assert entry['rgb'] == 0xFF0000
     assert entry['lab'] == (50,50,50)
 
