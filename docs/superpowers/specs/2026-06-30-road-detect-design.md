@@ -61,10 +61,11 @@ UI 布局与持久化**逐格复刻** `scripts/color_detect/app.py`,只在检测
 ### 5.2 逐行质心折线(on_frame 核心)
 
 1. chn1 QVGA RGB565 `find_blobs([union_th_list])` 取最大 blob 作道路区域(rect `[x,y,w,h]` in QVGA),用于 bbox 上报与质心计算
-2. **逐行质心**:纯函数 `_row_centroids(blob_rect, img_det, th, step=8)`:
+2. **逐行质心**:纯函数 `_row_centroids(blob_rect, get_pixel_fn, th, step=8)`:
+   - 第二参数 `get_pixel_fn(x, y) -> (r,g,b)|int` 是像素读取抽象:运行时传入 `img_det.get_pixel` 的薄封装,host 测试注入合成像素表 → 函数纯逻辑可测
    - 在 blob rect 内,每隔 `step` 行
-   - 对该行 y,扫描 x ∈ [blob.x, blob.x+blob.w],用 `img_det.get_pixel` 或按行统计道路像素
-   - 道路像素的 x 均值 → 质心点 `(cx, row_y)`
+   - 对该行 y,扫描 x ∈ [blob.x, blob.x+blob.w],逐像素 `get_pixel_fn` 判定是否在 LAB 阈值内
+   - 道路像素的 x 均值 → 质心点 `(cx, row_y)`,无道路像素的行跳过
    - 返回质心点列表(均 in QVGA 坐标)
    - 性能:step=8 降开销;QVGA 240 高 → 约 30 个采样点/帧
 3. chn0 VGA 上把质心点序列 ×`DET_SCALE`(2)缩放,用 `img.draw_line` 连成**绿色折线**(颜色 `(0xFF, 0x00, 0xFF, 0x00)` = ABGR 绿)
@@ -132,7 +133,7 @@ TYPE_ROAD_DETECT 常量已存在,只需补映射。
 ## 9. 测试(TDD)
 
 - `_union_threshold(samples)` 纯函数:给定多样本 → 验证并集 + 裁剪(含无样本默认、部分样本)
-- `_row_centroids(blob_rect, pixels, th, step)` 纯函数:host 端注入合成像素分布 → 验证质心 x(笔直→x 相等,偏移→x 偏移)
+- `_row_centroids(blob_rect, get_pixel_fn, th, step)` 纯函数:host 端注入合成 `get_pixel_fn` → 验证质心 x(笔直→x 相等,偏移→x 偏移,无道路像素行跳过)
 - `_make_threshold` / `_rgb_to_lab` 复用 color_detect 已测函数(若提取为公共模块则共享测试;否则在 road_detect 测试中复测)
 - `RoadDB` 纯 Python:lock / get / clear / load_from_disk / flush_to_disk / count(对齐 ColorDB 测试模式,用 tmp 路径)
 - 协议:`CATEGORY_TYPE["road_detect"] == 0x07`
