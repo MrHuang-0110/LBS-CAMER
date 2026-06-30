@@ -259,9 +259,9 @@ class AppRuntime:
             # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示(QVGA→VGA)。
             chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "road_detect":
-            # chn1 QVGA RGB565 专做 find_blobs 道路检测(同 color_detect)；
-            # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示。
-            chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
+            # 暂时单通道 chn0 VGA RGB888 预览(不跑AI、隐藏底栏)。
+            # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并恢复 chn1 QVGA RGB565 检测。
+            pass
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs

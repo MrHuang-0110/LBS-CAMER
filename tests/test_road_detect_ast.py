@@ -39,14 +39,31 @@ def test_road_detect_in_category_type_map():
     assert "TYPE_ROAD_DETECT" in src.split('"road_detect":')[1][:80]
 
 
-def test_channels_for_road_detect_qvga_rgb565():
-    """_channels_for 必须为 road_detect 配 chn1 QVGA RGB565(同 color_detect)。"""
+def test_channels_for_road_detect_single_channel():
+    """road_detect 暂时单通道(只 chn0 VGA RGB888 预览,不跑AI)。
+    _channels_for 的 road_detect 分支不应 append chn1。"""
     src = _read(APP_RUNTIME_PATH)
     start = src.find("def _channels_for(")
     body = src[start:start + 1200]
     assert "road_detect" in body, "_channels_for must handle road_detect"
-    assert "QVGA" in body.split('"road_detect"')[1][:200], "road_detect must use QVGA"
-    assert "RGB565" in body.split('"road_detect"')[1][:200], "road_detect must use RGB565"
+    # road_detect 分支后 200 字符内不应出现 append(单通道,不加 chn1)
+    after = body.split('"road_detect"')[1][:200]
+    assert "append" not in after, "road_detect should be single-channel (no chn1 append) for now"
+
+
+def test_road_detect_detection_disabled_flag():
+    """app.py 必须有 _DETECTION_ENABLED 模块级标志(暂为 False,后续完善改 True)。"""
+    app_path = os.path.join(ROOT, "scripts", "road_detect", "app.py")
+    src = _read(app_path)
+    tree = ast.parse(src)
+    found = False
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name) and t.id == "_DETECTION_ENABLED":
+                    found = True
+    assert found, "_DETECTION_ENABLED must be module-level in app.py"
+    assert "_DETECTION_ENABLED = False" in src, "_DETECTION_ENABLED must be False for now"
 
 
 def test_preload_road_icons_in_init_app():

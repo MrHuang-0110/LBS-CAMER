@@ -28,6 +28,10 @@ _ROAD_DB_PATH = "/sdcard/CamerAi/data/road_db.json"
 L_LO, L_HI = 0, 100
 AB_LO, AB_HI = -128, 127
 
+# 道路识别暂为单摄像源预览(不跑AI、隐藏底栏/左表/滑块)。
+# 后续完善时改 True:恢复 chn1 检测通道(_channels_for)、底栏 UI、on_frame 检测分支。
+_DETECTION_ENABLED = False
+
 # 道路绿线/框颜色(ABGR):绿色
 ROAD_GREEN = (0xFF, 0x00, 0xFF, 0x00)
 
@@ -421,6 +425,10 @@ def _build_ui(runtime, exit_flag):
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
 
+    if not _DETECTION_ENABLED:
+        # 预览模式:只顶栏 + chn0 全屏预览(OSD1 透出),不建左表/滑块/底栏。
+        return
+
     _TABLE_X = 4
     _TABLE_Y = BAR_H + 4
     _TABLE_W = 150
@@ -581,9 +589,15 @@ def _find_largest_blob(img_det, th):
 
 
 def on_frame(img):
-    """chn1 find_blobs 道路检测 -> 并集阈值 + 逐行质心绿线 + bbox -> host_tick(0x07)。"""
+    """单摄像源预览(暂不跑AI)。后续完善时改 _DETECTION_ENABLED=True 启用检测分支。"""
     if _RUNTIME is None:
         return
+    if not _DETECTION_ENABLED:
+        # 预览模式:仅显示 chn0(主循环 show_image),不检测。协议心跳用空 slots。
+        if _RUNTIME.host is not None:
+            _RUNTIME.host_tick(None)
+        return
+    # --- 以下为检测分支(_DETECTION_ENABLED=True 时启用)---
     img_det = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_1)
     slots = [None, None, None, None]
     cur_th = _current_threshold_tuple()
@@ -678,7 +692,7 @@ def run(runtime):
     _RUNTIME = runtime
     _road_db = RoadDB()
     entry = _road_db.load_from_disk(_ROAD_DB_PATH)
-    if entry is not None:
+    if _DETECTION_ENABLED and entry is not None:
         # 还原 6 阈值
         th = entry['threshold']
         _thresh_values.update({
@@ -694,16 +708,17 @@ def run(runtime):
         _swatch = samples[:3]
     exit_flag = [False]
     _build_ui(runtime, exit_flag)
-    _refresh_count()
-    # 还原后刷新 6 格标签
-    for key in _thresh_labels:
-        lbl = _thresh_labels[key]
-        if lbl is not None:
-            try:
-                lbl.set_text(str(_thresh_values[key]))
-            except Exception:
-                pass
-    _refresh_table()
+    if _DETECTION_ENABLED:
+        _refresh_count()
+        # 还原后刷新 6 格标签
+        for key in _thresh_labels:
+            lbl = _thresh_labels[key]
+            if lbl is not None:
+                try:
+                    lbl.set_text(str(_thresh_values[key]))
+                except Exception:
+                    pass
+        _refresh_table()
     fc = 0
     try:
         while not exit_flag[0]:
