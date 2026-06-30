@@ -27,6 +27,7 @@ CARD_ACTIVE = 0x2E7D32   # 选中格绿色
 DET_SCALE = 2
 # 取色容差(L/A/B 统一 ±10)
 TOLERANCE = 10
+_COLOR_DB_PATH = "/sdcard/CamerAi/data/color_db.json"
 # L 范围 0-100,A/B 范围 -128~127
 L_LO, L_HI = 0, 100
 AB_LO, AB_HI = -128, 127
@@ -716,7 +717,6 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _color_db
     _RUNTIME = runtime
-    _COLOR_DB_PATH = "/sdcard/CamerAi/data/color_db.json"
     _color_db = ColorDB()
     _color_db.load_from_disk(_COLOR_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
     exit_flag = [False]

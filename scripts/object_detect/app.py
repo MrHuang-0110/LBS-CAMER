@@ -33,6 +33,7 @@ BOX_COLORS = {
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
+_OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
 RGB888P_W = 1024
 RGB888P_H = 768
 DISPLAY_W = 640
@@ -407,7 +408,6 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _db
     _RUNTIME = runtime
-    _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
     _db = ObjectDB()
     _db.load_from_disk(_OBJ_DB_PATH)
     exit_flag = [False]

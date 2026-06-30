@@ -115,6 +115,25 @@ def test_run_loop_has_exitpoint_and_task_handler():
     assert "_process_overlay_close" in seg, "run loop must call _process_overlay_close()"
 
 
+
+
+def test_object_db_path_is_module_level_for_on_frame_flush():
+    """_OBJ_DB_PATH must be module-level because on_frame() uses it when flushing after register."""
+    src = _app_src()
+    tree = ast.parse(src, filename=APP_PATH)
+    module_assigns = [n for n in tree.body if isinstance(n, ast.Assign)]
+    names = []
+    for n in module_assigns:
+        for t in n.targets:
+            if isinstance(t, ast.Name):
+                names.append(t.id)
+    assert "_OBJ_DB_PATH" in names, "_OBJ_DB_PATH must be module-level, not local to run()"
+    run_seg = ast.get_source_segment(src, _func("run")) or ""
+    assert "_db.load_from_disk(_OBJ_DB_PATH)" in run_seg
+    on_frame_seg = ast.get_source_segment(src, _func("on_frame")) or ""
+    assert "_db.flush_to_disk(_OBJ_DB_PATH)" in on_frame_seg
+
+
 def test_app_uses_i18n_not_hardcoded():
     """文本须走 lang.t(),不得硬编码中文。"""
     src = _app_src()

@@ -68,6 +68,27 @@ def test_run_loop_has_exitpoint_and_task_handler():
     assert "task_handler" in seg, "run loop must call lv.task_handler()"
 
 
+
+
+def test_tag_db_paths_are_module_level_for_on_frame_flush():
+    """Tag DB paths must be module-level because on_frame() uses them after register."""
+    src = _app_src()
+    tree = ast.parse(src, filename=APP_PATH)
+    module_names = []
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    module_names.append(t.id)
+    assert "_APRIL_DB_PATH" in module_names
+    assert "_QR_DB_PATH" in module_names
+    on_frame_seg = ast.get_source_segment(src, _func("on_frame")) or ""
+    assert "flush_to_disk(_path)" in on_frame_seg
+    run_seg = ast.get_source_segment(src, _func("run")) or ""
+    assert "_april_db.load_from_disk(_APRIL_DB_PATH)" in run_seg
+    assert "_qr_db.load_from_disk(_QR_DB_PATH)" in run_seg
+
+
 def test_app_uses_i18n_not_hardcoded():
     """文本须走 lang.t(),不得硬编码中文。"""
     src = _app_src()

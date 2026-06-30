@@ -25,6 +25,8 @@ CARD_BG = 0x2A2A2A
 CARD_ACTIVE = 0x2E7D32   # 选中卡片绿色
 # chn1 QVGA(320x240) -> chn0 VGA(640x480):坐标 x2 整数缩放
 DET_SCALE = 2
+_APRIL_DB_PATH = "/sdcard/CamerAi/data/tag_april.json"
+_QR_DB_PATH = "/sdcard/CamerAi/data/tag_qr.json"
 
 # 画框配色对齐 face_detect(core/face_ai):未注册白框,注册按 slot 取彩色。
 BOX_COLORS = {
@@ -432,8 +434,6 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _april_db, _qr_db
     _RUNTIME = runtime
-    _APRIL_DB_PATH = "/sdcard/CamerAi/data/tag_april.json"
-    _QR_DB_PATH = "/sdcard/CamerAi/data/tag_qr.json"
     _april_db = TagDB()
     _qr_db = TagDB()
     _april_db.load_from_disk(_APRIL_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）

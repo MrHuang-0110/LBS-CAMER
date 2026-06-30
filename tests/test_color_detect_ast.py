@@ -14,6 +14,20 @@ def _read(path):
         return f.read()
 
 
+def test_color_db_path_is_module_level_for_on_frame_flush():
+    """_COLOR_DB_PATH must be module-level because on_frame() uses it after register."""
+    src = _read(APP_PATH)
+    tree = ast.parse(src)
+    module_names = []
+    for n in tree.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    module_names.append(t.id)
+    assert "_COLOR_DB_PATH" in module_names
+    assert "_color_db.flush_to_disk(_COLOR_DB_PATH)" in src
+    assert "_color_db.load_from_disk(_COLOR_DB_PATH)" in src
+
 def test_channels_for_color_detect_qvga_rgb565():
     """_channels_for 必须为 color_detect 配 chn1 QVGA RGB565(同 tag_detect)。"""
     src = _read(APP_RUNTIME_PATH)
