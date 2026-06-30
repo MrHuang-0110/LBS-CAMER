@@ -303,7 +303,7 @@ def _build_ui(runtime, exit_flag):
     _top_bar.clear_flag(lv.obj.FLAG.SCROLLABLE)
 
     btn = lv.obj(_top_bar)
-    btn.set_size(48, 48)
+    btn.set_size(64, 64)
     btn.align(lv.ALIGN.LEFT_MID, 2, 0)
     btn.set_style_bg_opa(0, 0)
     btn.set_style_border_width(0, 0)
@@ -321,7 +321,7 @@ def _build_ui(runtime, exit_flag):
         if len(icon_data) >= 24:
             w = struct.unpack('>I', icon_data[16:20])[0]
             h = struct.unpack('>I', icon_data[20:24])[0]
-        target = int(48 * 0.85)
+        target = int(64 * 0.85)
         zoom = int(min(target / w, target / h) * 256) if w > 0 and h > 0 else 256
         zoom = max(8, min(zoom, 256))
         icon_img = lv.img(btn)
@@ -335,6 +335,8 @@ def _build_ui(runtime, exit_flag):
 
     def _on_back(e):
         if e.get_code() == lv.EVENT.CLICKED:
+            if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+                _RUNTIME.buzzer.beep(ms=50)
             exit_flag[0] = True
     btn.add_event(_on_back, lv.EVENT.CLICKED, None)
 

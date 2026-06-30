@@ -15,7 +15,7 @@ class BackBar:
     """统一返回栏 — 由 ScriptRunner 自动挂载到所有脚本"""
 
     HEIGHT = 52
-    BTN_SIZE = 48
+    BTN_SIZE = 64
     STATUS_WIDTH = 40
 
     def __init__(self, title, on_back=None, icon_path=None):
