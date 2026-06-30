@@ -29,8 +29,8 @@ from ui.theme import Colors, make_back_bar_text_style
 BAR_H = 52              # 顶栏/底栏高度
 PREVIEW_Y = BAR_H       # 预览区起始 Y
 PREVIEW_H = 376         # 480 - BAR_H * 2
-BTN_SIZE = 48           # 栏上按钮点击区
-ICON_TARGET = 40        # 栏上图标目标尺寸
+BTN_SIZE = 64           # 栏上按钮点击区
+ICON_TARGET = 54        # 栏上图标目标尺寸(int(64*0.85))
 SHUTTER_OUTER = 44      # 快门外径(含圆环)
 BAR_BG = 0x1A1A1A       # 栏背景色
 
@@ -215,6 +215,9 @@ def _build_top_bar(runtime, exit_flag):
 
     def _on_back(e):
         if e.get_code() == lv.EVENT.CLICKED:
+            rt = _ctx_runtime()
+            if rt is not None and rt.buzzer is not None:
+                rt.buzzer.beep(ms=50)
             if _state == STATE_GALLERY:
                 _leave_gallery()
             else:
