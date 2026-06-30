@@ -56,7 +56,7 @@
     "save": "保存",
     "clear": "清除",
     "save_success": "保存成功",
-    "registered": "已注册 %d/4",
+    "registered": "已学习 %d/4",
     "press_k2": "按K2注册人脸",
     "back_fb": "<",
     "list_fb": "="
@@ -64,17 +64,17 @@
   "tag_detect": {
     "april_tag": "AprilTag",
     "qr_code": "二维码",
-    "registered": "已注册 %d/4",
+    "registered": "已学习 %d/4",
     "clear": "清除",
     "save": "保存"
   },
   "object_detect": {
-    "registered": "已注册 %d/4",
+    "registered": "已学习 %d/4",
     "clear": "清除",
     "save": "保存"
   },
   "color_detect": {
-    "registered": "已注册 %d/4",
+    "registered": "已学习 %d/4",
     "clear": "清除",
     "save": "保存",
     "Lmin": "L最小",

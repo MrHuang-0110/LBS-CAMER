@@ -441,6 +441,7 @@ def run(runtime):
     exit_flag = [False]
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
+    _refresh_count()  # load 后刷新计数（显示当前 active DB 已学习数量）
     fc = 0
     try:
         while not exit_flag[0]:

@@ -74,8 +74,9 @@ class ColorDB:
         return self._features.get(slot_id)
 
     def iter_slots(self):
-        """遍历所有槽 entry(供每帧检测用)。"""
-        return self._features.values()
+        """遍历所有槽 (slot_id, entry)，按 slot_id 升序。"""
+        for slot_id in sorted(self._features.keys()):
+            yield slot_id, self._features[slot_id]
 
     def _serialize(self):
         slots = {}

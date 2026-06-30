@@ -414,6 +414,7 @@ def run(runtime):
     _init_ai()
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
+    _refresh_count()  # load 后刷新计数（显示已学习数量）
     fc = 0
     try:
         while not exit_flag[0]:

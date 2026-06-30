@@ -68,9 +68,11 @@ def test_iter_slots():
     db = ColorDB()
     db.register(((40,60,-10,10,-10,10),(50,50,50)), rgb=0xFF0000)
     db.register(((70,90,20,40,10,30),(80,30,20)), rgb=0x00FF00)
-    slots = list(db.iter_slots())
-    assert len(slots) == 2
-    assert all('threshold' in e and 'rgb' in e and 'lab' in e for e in slots)
+    items = list(db.iter_slots())
+    assert len(items) == 2
+    assert items[0][0] == 1    # 第一个槽 slot_id=1
+    assert items[1][0] == 2    # 第二个槽 slot_id=2
+    assert all('threshold' in e and 'rgb' in e and 'lab' in e for _, e in items)
 
 
 def test_runner():

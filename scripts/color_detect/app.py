@@ -138,17 +138,21 @@ def _init_registry(fpioa):
 
 
 def _select_cell(key):
-    """选中某阈值格(置绿)+ 滑块 range/value 同步。"""
+    """选中某阈值格(置绿)+ 滑块 range/value 同步。再次点击同一格取消选中(置灰)。"""
     global _selected_key
-    _selected_key = key
+    if _selected_key == key:
+        _selected_key = None
+        key = None  # 取消选中格
+    else:
+        _selected_key = key
     for k, cell in _thresh_cells.items():
         try:
             cell.set_style_bg_color(
                 lv.color_hex(CARD_ACTIVE if k == key else CARD_BG), 0)
         except Exception:
             pass
-    # 同步滑块 range + value
-    if _slider is not None:
+    # 同步滑块 range + value（取消选中时滑块不动,保持当前位置）
+    if _slider is not None and key is not None:
         for k, _label, lo, hi, _dflt in THRESH_CELLS:
             if k == key:
                 _slider.set_range(lo, hi)
@@ -640,18 +644,18 @@ def on_frame(img):
                            color=color, thickness=2)
 
     # 注册色检测 -> 彩色 ID 框 + 填 slots
-    for slot, entry in enumerate(_color_db.iter_slots(), start=1):
+    for entry_idx, entry in _color_db.iter_slots():
         r2 = _find_largest_blob(img_det, entry['threshold'])
         if r2 is not None:
             x, y, w, h = [int(v) for v in r2]
-            box_color = BOX_COLORS.get(slot, BOX_UNKNOWN)
+            box_color = BOX_COLORS.get(entry_idx, BOX_UNKNOWN)
             color = _draw_color(box_color)
             img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
                                w * DET_SCALE, h * DET_SCALE,
                                color=color, thickness=4)
             img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
-                                     "ID%d" % slot, color=color)
-            slots[slot - 1] = (slot, x * DET_SCALE, y * DET_SCALE,
+                                     "ID%d" % entry_idx, color=color)
+            slots[entry_idx - 1] = (entry_idx, x * DET_SCALE, y * DET_SCALE,
                                w * DET_SCALE, h * DET_SCALE, 100)
 
     # 居中绿色十字(对齐 tag_detect)
@@ -722,6 +726,7 @@ def run(runtime):
     exit_flag = [False]
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
+    _refresh_count()  # load 后刷新计数（显示已学习数量）
     fc = 0
     try:
         while not exit_flag[0]:

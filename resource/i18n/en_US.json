@@ -56,7 +56,7 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Registered %d/4",
+    "registered": "Learned %d/4",
     "press_k2": "Press K2 to register",
     "back_fb": "<",
     "list_fb": "="
@@ -64,17 +64,17 @@
   "tag_detect": {
     "april_tag": "AprilTag",
     "qr_code": "QR Code",
-    "registered": "Registered %d/4",
+    "registered": "Learned %d/4",
     "clear": "Clear",
     "save": "Save"
   },
   "object_detect": {
-    "registered": "Registered %d/4",
+    "registered": "Learned %d/4",
     "clear": "Clear",
     "save": "Save"
   },
   "color_detect": {
-    "registered": "Reg %d/4",
+    "registered": "Lrn %d/4",
     "clear": "Clear",
     "save": "Save",
     "Lmin": "Lmin",
