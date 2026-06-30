@@ -88,6 +88,15 @@
     "id1": "ID1",
     "saved": "Saved ID1"
   },
+  "gesture_detect": {
+    "save": "Save",
+    "clear": "Clear",
+    "save_success": "Saved",
+    "registered": "Learned %d/4",
+    "press_k2": "Press K2 to register gesture",
+    "back_fb": "<",
+    "list_fb": "="
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"

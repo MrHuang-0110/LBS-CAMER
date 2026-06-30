@@ -234,6 +234,8 @@ class AppRuntime:
             icon_cache.preload_color_icons()
         elif category_id == "road_detect":
             icon_cache.preload_road_icons()
+        elif category_id == "gesture_detect":
+            icon_cache.preload_gesture_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -262,6 +264,9 @@ class AppRuntime:
             # 暂时单通道 chn0 VGA RGB888 预览(不跑AI、隐藏底栏)。
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并恢复 chn1 QVGA RGB565 检测。
             pass
+        elif category_id == "gesture_detect":
+            # chn2 XGA RGBP888 做 AI 推理(同 face_detect AI 通道)
+            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs

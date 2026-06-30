@@ -88,6 +88,15 @@
     "id1": "ID1",
     "saved": "已保存 ID1"
   },
+  "gesture_detect": {
+    "save": "保存",
+    "clear": "清除",
+    "save_success": "保存成功",
+    "registered": "已学习 %d/4",
+    "press_k2": "按K2注册手势",
+    "back_fb": "<",
+    "list_fb": "="
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"
