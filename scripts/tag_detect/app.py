@@ -132,6 +132,8 @@ def on_frame(img):
                                          registrar=db.register)
         if slot is not None:
             _refresh_count()
+            _path = _APRIL_DB_PATH if db is _april_db else _QR_DB_PATH
+            db.flush_to_disk(_path)  # 注册即写（on_frame 内，task_handler 前）
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
@@ -430,8 +432,12 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _april_db, _qr_db
     _RUNTIME = runtime
+    _APRIL_DB_PATH = "/sdcard/CamerAi/data/tag_april.json"
+    _QR_DB_PATH = "/sdcard/CamerAi/data/tag_qr.json"
     _april_db = TagDB()
     _qr_db = TagDB()
+    _april_db.load_from_disk(_APRIL_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
+    _qr_db.load_from_disk(_QR_DB_PATH)
     exit_flag = [False]
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
@@ -459,7 +465,7 @@ def run(runtime):
     finally:
         _destroy_ui()
         if _april_db is not None:
-            _april_db.flush_to_disk()
+            _april_db.flush_to_disk(_APRIL_DB_PATH)
         if _qr_db is not None:
-            _qr_db.flush_to_disk()
+            _qr_db.flush_to_disk(_QR_DB_PATH)
         _RUNTIME = None
