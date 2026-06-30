@@ -39,7 +39,7 @@ DIVIDER_W = 4       # 左右栏分界线宽度
 DIVIDER_COLOR = 0x555555  # 分界线颜色（比两侧面板亮）
 
 # 顶栏按钮
-TOP_BTN_SIZE = 48
+TOP_BTN_SIZE = 64
 
 # ── 模块级 UI 引用（替代旧类 self._xxx）──
 _screen = None
@@ -130,6 +130,8 @@ def _build_top_bar(runtime, exit_flag):
 
     def _on_back(e):
         if e.get_code() == lv.EVENT.CLICKED:
+            if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+                _RUNTIME.buzzer.beep(ms=50)
             exit_flag[0] = True
     btn.add_event(_on_back, lv.EVENT.CLICKED, None)
 
