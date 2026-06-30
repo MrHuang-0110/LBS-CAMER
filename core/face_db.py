@@ -20,6 +20,11 @@
 _DB_DIR = "/sdcard/CamerAi/fac_db"  # 诊断：从 /data 改 /sdcard（同 anchors/kmodel 分区，避坑#18 /data I/O 污染）
 _NEXT_SLOT_PATH = "/sdcard/CamerAi/fac_db/.next_slot"  # Step 7: 轮转覆盖指针持久化（1-4 循环）
 
+import os
+from core import db_store
+
+FACE_DB_PATH = "/sdcard/CamerAi/data/face_db.json"
+
 
 class _FaceDB:
     """全局人脸特征缓存"""
@@ -34,16 +39,15 @@ class _FaceDB:
     # ── 运行时加载（APP 内 on_enter → _init_db 调用）────
 
     def init_features(self):
-        """加载已注册特征到内存。
+        """加载已注册特征到内存（启动期，首次 task_handler 前的安全窗口）。
 
-        ⚠️ 持久化路径待定：listdir/open 对 /data 或 /sdcard 的特征库 I/O 都会
-        污染 K230 FATFS/DMA 状态（坑#18），导致主循环卡死。当前阶段不读盘，
-        返回空库——注册/识别/清除的内存逻辑正常推进，重启后不保留历史特征。
-        持久化路径和加载方式后续决定（接口已预留，见 flush_to_disk/clear）。
+        从 FACE_DB_PATH 读 JSON（db_store os.stat 预检查，文件不存在返回空库，
+        避坑#18 open ENOENT 污染）。
         """
         self._features = {}
         self._loaded = True
-        print("[FaceDB] init_features: persistence disabled (in-memory only), 0 face(s)")
+        self.load_from_disk(FACE_DB_PATH)
+        print("[FaceDB] init_features: loaded %d face(s) from disk" % len(self._features))
         return self._features
 
     # ── Step 7: 轮转覆盖指针持久化 ──────────────────────
@@ -99,19 +103,42 @@ class _FaceDB:
 
     # ── 退出时刷盘（on_exit 中调用，lv.task_handler 已完成）──
 
-    def flush_to_disk(self):
-        """Exit-stage persistence. Called after task_handler stopped (pitfall #2 safe).
+    def _serialize(self):
+        """序列化为 JSON 可存结构。特征 ulab ndarray → list(float)。"""
+        slots = {}
+        for slot_id, feat in self._features.items():
+            try:
+                slots[str(slot_id)] = feat.tolist()
+            except Exception:
+                slots[str(slot_id)] = list(feat)
+        return {"next_slot": self._next_slot, "slots": slots}
 
-        ⚠️ 持久化路径待定（见 init_features 注释）：当前不写盘，仅复位 dirty 标志。
-        持久化路径和写盘方式后续决定后，在此实现 _clear_dirty 删盘 / _dirty 写盘。
-        """
-        if self._clear_dirty:
-            print("[FaceDB] exit: clear intent recorded (persistence disabled, no disk write)")
-        elif self._dirty:
-            print("[FaceDB] exit: %d feature(s) pending (persistence disabled, no disk write)"
-                  % len(self._features))
-        self._clear_dirty = False
+    def load_from_disk(self, path):
+        """启动加载。db_store os.stat 预检查，文件不存在返回 None（空库，避 ENOENT）。"""
+        data = db_store.load_json(path)
+        if data is None:
+            return None
+        try:
+            self._next_slot = data.get("next_slot", 1)
+            slots = data.get("slots", {})
+            for slot_str, feat_list in slots.items():
+                try:
+                    import ulab.numpy as np
+                    feat = np.array(feat_list, dtype=np.float)
+                except Exception:
+                    feat = list(feat_list)  # PC / ulab 缺失兜底
+                self._features[int(slot_str)] = feat
+        except Exception as e:
+            print("[FaceDB] load parse failed: %s" % e)
+        return self._features
+
+    def flush_to_disk(self, path=FACE_DB_PATH):
+        """写盘。注册即写（on_frame 内 task_handler 前，坑#2 安全窗口），
+        也作退出兜底。open('w') 不抛 ENOENT。"""
+        db_store.save_json(path, self._serialize())
         self._dirty = False
+        self._clear_dirty = False
+        print("[FaceDB] flushed %d face(s) to %s" % (len(self._features), path))
 
     def clear(self):
         """Clear all features in MEMORY only.
