@@ -46,69 +46,49 @@ def _default_threshold():
 
 # === 逐行质心 ===
 
-def _row_centroids(blob_rect, get_pixel_fn, th, step=8):
-    """在 blob rect 内每隔 step 行,逐像素判定是否在 LAB 阈值内,求该行 x 均值。
+def _row_centroids(find_blobs_fn, blob_rect, step=8):
+    """逐行求道路质心 x。用 find_blobs 逐行 ROI(C 实现)替代逐像素 get_pixel+LAB,
+    避免板端每帧上万次 Python 调用导致卡顿(对齐实验12 黑线循迹 demo 做法)。
 
-    blob_rect: [x, y, w, h]
-    get_pixel_fn(x, y): 返回 (r,g,b) 或 RGB565 int(兼容 color_detect 取色模式)
-    th: 6 阈值 (Lmin,Lmax,Amin,Amax,Bmin,Bmax)
-    step: 采样行间隔(默认 8)
-    返回: [(cx, row_y), ...] 质心点列表
+    find_blobs_fn(row_y) -> [blob, ...]:该行道路 blob 列表(blob 有 cx()/pixels())。
+    blob_rect: [x, y, w, h](大道路 blob 的 rect,限定逐行扫描范围)。
+    step: 采样行间隔(默认 8)。
+    返回: [(cx, row_y), ...] 质心点列表;每行取 pixels 最大的 blob 的 cx。
     """
-    # --- 内嵌轻量 sRGB→LAB(与 color_detect _rgb_to_lab 同算法,不依赖 import) ---
-    def _pixel_in_threshold(px):
-        # px 可能是 (r,g,b) tuple 或 int(RGB565)
-        if isinstance(px, (tuple, list)):
-            r, g, b = int(px[0]), int(px[1]), int(px[2])
-        elif isinstance(px, int):
-            r = ((px >> 11) & 0x1F) << 3
-            g = ((px >> 5) & 0x3F) << 2
-            b = (px & 0x1F) << 3
-        else:
-            return False
-        # sRGB→linear
-        def _linear(c):
-            c = c / 255.0
-            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
-        rl, gl, bl = _linear(r), _linear(g), _linear(b)
-        # sRGB→XYZ (D65)
-        x = (rl * 0.4124564 + gl * 0.3575761 + bl * 0.1804375) / 0.95047
-        y = (rl * 0.2126729 + gl * 0.7151522 + bl * 0.0721750) / 1.00000
-        z = (rl * 0.0193339 + gl * 0.1191920 + bl * 0.9503041) / 1.08883
-        def _f(t):
-            return t ** (1/3) if t > 0.008856 else (7.787 * t + 16/116)
-        fx, fy, fz = _f(x), _f(y), _f(z)
-        L = 116 * fy - 16
-        A = 500 * (fx - fy)
-        B = 200 * (fy - fz)
-        Lmin, Lmax, Amin, Amax, Bmin, Bmax = th
-        return (Lmin <= L <= Lmax) and (Amin <= A <= Amax) and (Bmin <= B <= Bmax)
-
     x, y, w, h = blob_rect
     centroids = []
-    for row_y in range(y, y + h, step):
-        sum_x = 0
-        cnt = 0
-        for col_x in range(int(x), int(x + w)):
-            try:
-                px = get_pixel_fn(col_x, row_y)
-            except Exception:
-                continue
-            if _pixel_in_threshold(px):
-                sum_x += col_x
-                cnt += 1
-        if cnt > 0:
-            centroids.append((sum_x / cnt, row_y))
+    for row_y in range(int(y), int(y + h), step):
+        blobs = find_blobs_fn(row_y)
+        if blobs:
+            best = max(blobs, key=lambda b: b.pixels())
+            centroids.append((best.cx(), row_y))
     return centroids
 
 
 # === 测试 ===
 
-# 合成像素工厂:给定 map {(x,y): (r,g,b)} 返回 get_pixel_fn
-def _make_pixel_fn(pixel_map):
-    def _fn(x, y):
-        return pixel_map.get((x, y), (0, 0, 0))
-    return _fn
+# 合成 find_blobs:_FakeBlob 模拟 K230 blob(有 cx()/pixels() 方法)。
+# _make_find_blobs_fn(road_cx_by_row) 返回 find_blobs_fn(row_y) -> [_FakeBlob] or []。
+# 用 find_blobs 逐行 ROI(C 实现)替代逐像素 get_pixel+LAB,避免板端卡顿。
+class _FakeBlob:
+    def __init__(self, cx, pixels):
+        self._cx = cx
+        self._px = pixels
+
+    def cx(self):
+        return self._cx
+
+    def pixels(self):
+        return self._px
+
+
+def _make_find_blobs_fn(road_cx_by_row):
+    """road_cx_by_row: {row_y: cx}。返回 find_blobs_fn(row_y) -> [_FakeBlob] or []。"""
+    def fn(row_y):
+        if row_y in road_cx_by_row:
+            return [_FakeBlob(road_cx_by_row[row_y], 10)]
+        return []
+    return fn
 
 
 def test_union_threshold_single_sample():
@@ -143,53 +123,41 @@ def test_union_threshold_empty():
 
 
 def test_row_centroids_straight_line():
-    """模拟笔直道路:blob 中央一列(50, 0)~(50, 99)为道路颜色,其余为背景。
-    期望:每步 8 行质心 x≈50。"""
-    road_color = (255, 0, 0)
-    bg_color = (0, 0, 0)
-    pixel_map = {}
-    # 100×100 blob,road at x=50
-    for y in range(100):
-        for x in range(100):
-            pixel_map[(x, y)] = road_color if x == 50 else bg_color
-    fn = _make_pixel_fn(pixel_map)
-    # Lmin=1 排除纯黑背景(LAB L=0.0 满足 0<=L<=100 会落在 0 起点上);
-    # 红(255,0,0)→LAB L≈53.24,仍在 [1,100] 内 → 只命中道路像素。
-    th = (1, 100, -128, 127, -128, 127)
-    centroids = _row_centroids([0, 0, 100, 100], fn, th, step=8)
-    # red pixel at x=50 every row → centroids all near 50
+    """笔直道路:每行道路质心 x=50。期望:所有质心 x=50。"""
+    road = {y: 50 for y in range(0, 100, 8)}
+    fn = _make_find_blobs_fn(road)
+    centroids = _row_centroids(fn, [0, 0, 100, 100], step=8)
     assert len(centroids) > 0
     for cx, row_y in centroids:
-        assert abs(cx - 50) < 1.0, "straight road: centroid should be ~50, got %.1f at row %d" % (cx, row_y)
+        assert cx == 50, "straight road: centroid should be 50, got %r at row %d" % (cx, row_y)
 
 
 def test_row_centroids_diagonal_line():
-    """模拟斜线道路:第 y 行道路像素在 x=y(45° 对角线)。
-    期望:质心随行线性偏移。"""
-    road_color = (0, 255, 0)
-    bg_color = (0, 0, 0)
-    pixel_map = {}
-    for y in range(100):
-        for x in range(100):
-            pixel_map[(x, y)] = road_color if x == y else bg_color
-    fn = _make_pixel_fn(pixel_map)
-    # Lmin=1 排除纯黑背景(LAB L=0);绿(0,255,0)→LAB L≈87.73 仍在内。
-    th = (1, 100, -128, 127, -128, 127)
-    centroids = _row_centroids([0, 0, 100, 100], fn, th, step=16)
+    """斜线道路:第 y 行质心 x=y。期望:质心随行线性偏移。"""
+    road = {y: y for y in range(0, 100, 16)}
+    fn = _make_find_blobs_fn(road)
+    centroids = _row_centroids(fn, [0, 0, 100, 100], step=16)
     for cx, row_y in centroids:
-        assert abs(cx - row_y) < 1.0, "diagonal road: centroid ~ row_y, got cx=%.1f at row %d" % (cx, row_y)
+        assert cx == row_y, "diagonal road: centroid ~ row_y, got %r at row %d" % (cx, row_y)
 
 
 def test_row_centroids_no_road_pixels():
-    """全背景:无道路像素,质心列表为空。"""
-    bg = (0, 0, 0)
-    pixel_map = {(x, y): bg for x in range(50) for y in range(50)}
-    fn = _make_pixel_fn(pixel_map)
-    # Lmin=1 排除纯黑(LAB L=0.0 < 1)→ 全黑场景每行 cnt=0 → 质心列表为空。
-    th = (1, 100, -128, 127, -128, 127)
-    centroids = _row_centroids([0, 0, 50, 50], fn, th, step=8)
-    # 全黑 = 不在阈值内(Lmin=1 把 L=0 挡掉) → 每行 cnt=0 → 跳过
+    """无道路(每行 find_blobs 返回 []):质心列表为空。"""
+    fn = _make_find_blobs_fn({})
+    centroids = _row_centroids(fn, [0, 0, 50, 50], step=8)
     assert len(centroids) == 0
+
+
+def test_row_centroids_picks_largest_blob():
+    """一行多 blob 时取 pixels 最大的那个的 cx。"""
+    def fn(row_y):
+        if row_y == 0:
+            return [_FakeBlob(10, 5), _FakeBlob(80, 20)]  # 80 那个更大
+        return []
+    centroids = _row_centroids(fn, [0, 0, 100, 8], step=8)
+    assert len(centroids) == 1
+    assert centroids[0][0] == 80
+    assert centroids[0][1] == 0
 
 
 def test_default_threshold():

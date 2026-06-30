@@ -90,34 +90,21 @@ def _union_threshold(samples):
     return (Lmin, Lmax, Amin, Amax, Bmin, Bmax)
 
 
-def _row_centroids(blob_rect, img_det, th, step=8):
-    """逐行求道路像素 x 质心。"""
-    import image as _img_mod
+def _row_centroids(find_blobs_fn, blob_rect, step=8):
+    """逐行求道路质心 x。用 find_blobs 逐行 ROI(C 实现)替代逐像素 get_pixel+LAB,
+    避免板端每帧上万次 Python 调用导致卡顿(对齐实验12 黑线循迹 demo 做法)。
+
+    find_blobs_fn(row_y) -> [blob, ...]:该行道路 blob 列表(blob 有 cx()/pixels())。
+    blob_rect: [x, y, w, h](大道路 blob 的 rect,限定逐行扫描范围)。
+    返回: [(cx, row_y), ...];每行取 pixels 最大的 blob 的 cx。
+    """
     x, y, w, h = blob_rect
     centroids = []
     for row_y in range(int(y), int(y + h), step):
-        sum_x = 0; cnt = 0
-        for col_x in range(int(x), int(x + w)):
-            try:
-                px = img_det.get_pixel(col_x, row_y)
-            except Exception:
-                continue
-            if isinstance(px, (tuple, list)):
-                r, g, b = int(px[0]), int(px[1]), int(px[2])
-            elif isinstance(px, int):
-                r = ((px >> 11) & 0x1F) << 3
-                g = ((px >> 5) & 0x3F) << 2
-                b = (px & 0x1F) << 3
-            else:
-                continue
-            lab = _rgb_to_lab(r, g, b)
-            L, A, B = lab
-            Lmin, Lmax, Amin, Amax, Bmin, Bmax = th
-            if (Lmin <= L <= Lmax) and (Amin <= A <= Amax) and (Bmin <= B <= Bmax):
-                sum_x += col_x
-                cnt += 1
-        if cnt > 0:
-            centroids.append((sum_x / cnt, row_y))
+        blobs = find_blobs_fn(row_y)
+        if blobs:
+            best = max(blobs, key=lambda b: b.pixels())
+            centroids.append((best.cx(), row_y))
     return centroids
 
 
@@ -633,8 +620,17 @@ def on_frame(img):
         img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
                            w * DET_SCALE, h * DET_SCALE,
                            color=ROAD_GREEN, thickness=2)
-        # 逐行质心:绿色折线
-        centroids = _row_centroids([x, y, w, h], img_det, cur_th, step=8)
+        # 逐行质心:find_blobs 逐行 ROI(C 实现,避免逐像素 get_pixel+LAB 卡顿),
+        # 限定在大 blob 的 x 范围内扫描,每行取最大 blob 的 cx,连绿色折线。
+        th_list = [int(v) for v in cur_th]
+        def _scan_row(_row_y, _x=x, _w=w, _th=th_list, _img=img_det):
+            try:
+                return _img.find_blobs([_th], roi=(_x, _row_y, _w, 1),
+                                       pixels_threshold=1, area_threshold=1,
+                                       merge=True)
+            except Exception:
+                return []
+        centroids = _row_centroids(_scan_row, [x, y, w, h], step=8)
         if len(centroids) >= 2:
             for i in range(len(centroids) - 1):
                 cx1 = int(centroids[i][0] * DET_SCALE)
@@ -645,9 +641,6 @@ def on_frame(img):
         # 报槽 1
         slots[0] = (1, x * DET_SCALE, y * DET_SCALE,
                     w * DET_SCALE, h * DET_SCALE, 100)
-
-    # 居中绿色十字
-    img.draw_cross(320, 240, color=ROAD_GREEN, size=20, thickness=2)
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
