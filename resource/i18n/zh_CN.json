@@ -84,6 +84,10 @@
     "Bmin": "B最小",
     "Bmax": "B最大"
   },
+  "road_detect": {
+    "id1": "ID1",
+    "saved": "已保存 ID1"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"
