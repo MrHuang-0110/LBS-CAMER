@@ -47,6 +47,7 @@ class HostAPI:
         "tag_detect": TYPE_TAG_DETECT,    # 0x04
         "object_detect": TYPE_OBJECT_DETECT,  # 0x05
         "color_detect": TYPE_COLOR_DETECT,  # 0x06
+        "road_detect":  TYPE_ROAD_DETECT,   # 0x07
         "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
     }
 

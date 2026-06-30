@@ -20,6 +20,7 @@ class _IconCache:
         self._tag_icons = {}      # name → (data, dsc)
         self._object_icons = {}   # name → (data, dsc)
         self._color_icons = {}      # name → (data, dsc)
+        self._road_icons = {}      # name → (data, dsc)
 
     def preload_settings_icons(self):
         """预读设置页图标（在首次 task_handler 之前调用）"""
@@ -194,6 +195,30 @@ class _IconCache:
     def get_color_icon(self, name):
         """获取颜色识别图标 (data, dsc)，未缓存返回 (None, None)"""
         return self._color_icons.get(name, (None, None))
+
+    def preload_road_icons(self):
+        """预读道路识别APP图标（在首次 task_handler 之前调用）"""
+        base = "/sdcard/CamerAi/resource/icons/road_detect_icon/"
+        icons = {
+            "list": base + "list.png",
+            "back": base + "back.png",
+        }
+        for name, path in icons.items():
+            try:
+                with open(path, 'rb') as f:
+                    data = bytearray(f.read())
+                dsc = lv.img_dsc_t({
+                    'data_size': len(data),
+                    'data': data,
+                })
+                self._road_icons[name] = (data, dsc)
+                print(f"[IconCache] road/{name} OK ({len(data)} bytes)")
+            except Exception as e:
+                print(f"[IconCache] road/{name} FAILED: {e}")
+
+    def get_road_icon(self, name):
+        """获取道路识别图标 (data, dsc)，未缓存返回 (None, None)"""
+        return self._road_icons.get(name, (None, None))
 
 
 # 全局单例

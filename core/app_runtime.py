@@ -232,6 +232,8 @@ class AppRuntime:
             icon_cache.preload_object_icons()
         elif category_id == "color_detect":
             icon_cache.preload_color_icons()
+        elif category_id == "road_detect":
+            icon_cache.preload_road_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -255,6 +257,10 @@ class AppRuntime:
         elif category_id == "color_detect":
             # chn1 QVGA RGB565 专做 find_blobs 颜色检测(同 tag_detect)；
             # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示(QVGA→VGA)。
+            chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
+        elif category_id == "road_detect":
+            # chn1 QVGA RGB565 专做 find_blobs 道路检测(同 color_detect)；
+            # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示。
             chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
