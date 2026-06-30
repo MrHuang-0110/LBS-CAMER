@@ -4,6 +4,7 @@
 - 状态:已批准(待 spec 复核)
 - 关联脚本:`scripts/road_detect/app.py`(新建)
 - 关联模块:`core/road_db.py`(新建)、`comm/host_api.py`(改)
+- 持久化:无 KEY2,默认 ID1,list 浮层"保存"按钮直接持久化
 
 ## 1. 背景与目标
 
@@ -17,7 +18,7 @@
 ## 2. 范围
 
 UI 布局与持久化**逐格复刻** `scripts/color_detect/app.py`,只在检测算法 / ID 模型 / 画框 / 协议四处按道路场景调整。
-不需要学习多 ID,只用 ID1。
+不需要学习多 ID,默认 ID1;不按 KEY2,list 浮层"保存"按钮直接持久化。
 
 ## 3. 文件改动
 
@@ -42,7 +43,8 @@ UI 布局与持久化**逐格复刻** `scripts/color_detect/app.py`,只在检测
 - **底栏**:list 图标(左)+ 6 阈值格(Lmin/Lmax/Amin/Amax/Bmin/Bmax)+ 计数标签(右)+ 预览区右侧竖向滑块
 - **list 浮层**:清除 / 保存(同 color_detect 的 `_on_list_clicked` / `_on_overlay_clicked`)
 
-**唯一 UI 差异**:计数标签显示"已锁定 ID1"而非"已学习 N"。
+**唯一 UI 差异**:计数标签显示"已保存 ID1"/"ID1"(随保存状态切换)而非"已学习 N"。
+**底栏 list 浮层语义差异**:color_detect 的"保存"是空操作(持久化靠 KEY2 注册+退出);road_detect 的"保存"是唯一持久化入口(无 KEY2)。
 
 复用的常量与组件:`BAR_H=52`、`PREVIEW_H=376`、`DET_SCALE=2`、`TOLERANCE=10`、`THRESH_CELLS`、`_make_cell`、`_select_cell`、`_on_slider_changed`、`_refresh_table`、`_rgb_to_lab`、`_make_threshold`、`_draw_color`。
 
@@ -80,7 +82,9 @@ UI 布局与持久化**逐格复刻** `scripts/color_detect/app.py`,只在检测
 
 实现时优先方案 B;若板端帧率不可接受再回退减小 step 或改 ROI find_blobs。
 
-## 6. ID / 持久化(RoadDB 单配置 + KEY2 锁定)
+## 6. ID / 持久化(RoadDB 单配置 + 保存即持久化)
+
+**不使用 KEY2 / IdRegistry**。默认就是 ID1,list 浮层"保存"按钮是唯一持久化入口。
 
 `core/road_db.py`,仿 `ColorDB` 的内存 + flush 模式,但**只存 1 个配置**(slot 1):
 
@@ -92,23 +96,26 @@ UI 布局与持久化**逐格复刻** `scripts/color_detect/app.py`,只在检测
 ```
 
 接口:
-- `lock(threshold, lab, rgb, samples)`:覆盖写入 slot 1,设 `_dirty`,返回 1
-- `get()`:取当前锁定配置 dict 或 None
+- `save(threshold, lab, rgb, samples)`:覆盖写入 slot 1,设 `_dirty`,返回 1
+- `get()`:取当前配置 dict 或 None
 - `clear()`:清内存,设 `_clear_dirty`
 - `load_from_disk(path)`:db_store 安全加载(ENOENT 返回 None)
 - `flush_to_disk(path)`:db_store 安全写入
-- `@property count`:0 或 1(供计数文案判断)
+- `@property saved`:bool(供计数文案判断是否已保存)
 
 路径:`/sdcard/CamerAi/data/road_db.json`
 
-**KEY2 行为**(与 color_detect 不同):不轮转 4 槽,而是**锁定当前并集阈值为 ID1**(覆盖)。
-`IdRegistry.try_register((union_th, lab_mid), buzzer, registrar=lambda th: road_db.lock(th, lab_mid, latest_rgb, list(_swatch)))`。
+**保存按钮行为**(与 color_detect 不同:color_detect 的"保存"是空操作,持久化靠 KEY2+退出;road_detect 把"保存"提升为唯一持久化入口):
+- list 浮层"保存" → 取当前并集阈值 `_current_threshold_tuple()` + 中心 LAB + 最新采样 RGB + 左表 3 槽 → `road_db.save(...)` → `road_db.flush_to_disk(path)` → beep → 关浮层 → 刷新计数文案为"已保存 ID1"
+- list 浮层"清除" → `road_db.clear()` → `road_db.flush_to_disk(path)`(写空文件)→ beep → 关浮层 → 刷新文案为"ID1"
 
 **生命周期**:
-- `run()` 启动:`road_db.load_from_disk()`;若有锁定配置 → 套用到 6 阈值格 + 还原左表 3 槽
-- KEY2 锁定:`road_db.flush_to_disk()`(on_frame 内,task_handler 前)
-- 退出兜底:`road_db.flush_to_disk()`
-- list 浮层"清除":`road_db.clear()`(仅清内存,退出时 flush 清空文件)
+- `run()` 启动:`road_db.load_from_disk()`;若有配置 → 套用到 6 阈值格 + 还原左表 3 槽
+- "保存"按钮:`road_db.save(...)` + `flush_to_disk()`(UI 事件回调内)
+- "清除"按钮:`road_db.clear()` + `flush_to_disk()`
+- 退出兜底:`road_db.flush_to_disk()`(已保存的不重复写;dirty/clear_dirty 标志防冗余 IO)
+
+**不引入 IdRegistry**:`_init_registry` / `poll_k2` / `has_pending` / `try_register` 全部不调用,主循环去掉 `poll_k2`。
 
 ## 7. 协议(0x07)
 
@@ -135,7 +142,7 @@ TYPE_ROAD_DETECT 常量已存在,只需补映射。
 - `_union_threshold(samples)` 纯函数:给定多样本 → 验证并集 + 裁剪(含无样本默认、部分样本)
 - `_row_centroids(blob_rect, get_pixel_fn, th, step)` 纯函数:host 端注入合成 `get_pixel_fn` → 验证质心 x(笔直→x 相等,偏移→x 偏移,无道路像素行跳过)
 - `_make_threshold` / `_rgb_to_lab` 复用 color_detect 已测函数(若提取为公共模块则共享测试;否则在 road_detect 测试中复测)
-- `RoadDB` 纯 Python:lock / get / clear / load_from_disk / flush_to_disk / count(对齐 ColorDB 测试模式,用 tmp 路径)
+- `RoadDB` 纯 Python:save / get / clear / load_from_disk / flush_to_disk / saved(对齐 ColorDB 测试模式,用 tmp 路径)
 - 协议:`CATEGORY_TYPE["road_detect"] == 0x07`
 
 ## 10. 与 color_detect 的差异清单
@@ -143,10 +150,11 @@ TYPE_ROAD_DETECT 常量已存在,只需补映射。
 | 维度 | color_detect | road_detect |
 |------|--------------|-------------|
 | 检测算法 | 单点阈值 + 最大 blob bbox | 并集阈值 + 逐行质心绿线 |
-| ID 模型 | 4 槽轮转注册 | 单槽 ID1 锁定 |
+| ID 模型 | 4 槽轮转注册(KEY2) | 单槽 ID1,保存即持久化(无 KEY2) |
 | 画框 | 多色彩色 ID 框 + 居中十字 | 道路 bbox 细绿框 + 绿色中线折线 + 居中十字 |
 | 协议 | 0x06 | 0x07 |
-| 计数文案 | "已学习 N" | "已锁定 ID1" |
+| 计数文案 | "已学习 N" | "已保存 ID1"/"ID1" |
+| 持久化触发 | KEY2 注册 + 退出 | list 浮层"保存"/"清除"按钮 + 退出兜底 |
 | 持久化 | ColorDB(4 槽) | RoadDB(1 槽,多存 samples) |
 
 UI 布局、取色、滑块、list 浮层、持久化机制、单线程模板、i18n 注册流程——全部与 color_detect 一致。
