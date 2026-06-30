@@ -10,7 +10,17 @@
 
 import gc
 import os
+import sys
 import time
+
+# probe 可能被当作 /sdcard/main.py 跑,而 core/、ui/ 在 /sdcard/CamerAi/ 下。
+# 把 CamerAi 目录加进模块搜索路径,使 from ui.main_menu / from core.* 可用。
+for _base in ("/sdcard/CamerAi", "/sdcard/CamerAI", "/sdcard/camerai"):
+    try:
+        if _base not in sys.path:
+            sys.path.insert(0, _base)
+    except Exception:
+        pass
 
 import lvgl as lv
 import uctypes

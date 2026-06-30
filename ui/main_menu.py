@@ -51,6 +51,17 @@ SCROLL_SNAP_TIME = 250  # 吸附动画时长 (ms)
 SCROLL_SNAP_DELAY = 150  # 触摸释放后延迟开始吸附 (ms)
 GEOM_ANIM_TIME = 280     # 卡片宽窄/位置过渡动画时长(ms),ease_out 顺滑
 
+# Board diagnostic: prints once per second while menu is alive. Keep False for normal builds.
+MENU_DIAG_MEM = False
+MENU_DIAG_FORCE_GC_AT_SEQ = 0  # 0=disabled; positive value runs gc at that printed seq.
+
+# Avoid Python lv.anim_t custom callbacks on K230 scroll path; they allocate and can pin closures.
+USE_PY_SCROLL_ANIM = False
+
+ZOOM_SELECTED = 256
+ZOOM_NORMAL = 205  # 80% visual scale, replacing width shrink animation.
+CARD_SHIFT_X = CARD_W - CARD_W_NORMAL
+
 
 class MainMenu:
     """纵向卡片滑动主菜单"""
@@ -76,6 +87,11 @@ class MainMenu:
         self._scroll_end_timer = None
         self._is_scrolling = False
         self._icon_cache = {}       # {cat_id: bytes} 预读图标,常驻内存
+        self._bg_style = None       # lv.style_t 必须保活，GC 后 C 侧仍引用
+        self._scroll_cb = None      # LVGL 事件回调必须保活，防 GC 后 C 侧悬空
+        self._scroll_end_cb = None
+        self._diag_last_ms = 0
+        self._diag_seq = 0
 
     # ── 公开 API ──────────────────────────────────────
 
@@ -130,8 +146,8 @@ class MainMenu:
         self._screen = lv.obj(screen)
         self._screen.set_size(scr_w, scr_h)
         self._screen.center()
-        bg_style = make_bg_style()
-        self._screen.add_style(bg_style, 0)
+        self._bg_style = make_bg_style()
+        self._screen.add_style(self._bg_style, 0)
         self._screen.clear_flag(lv.obj.FLAG.SCROLLABLE)
         # 确保主菜单在最顶层（覆盖残留的 splash 等）
         self._screen.move_foreground()
@@ -230,8 +246,10 @@ class MainMenu:
 
         # ── 滚动事件：吸附 + 选中联动 ──
         print("[MainMenu] setting up scroll events...")
-        self._scroll.add_event(self._on_scroll, lv.EVENT.SCROLL, None)
-        self._scroll.add_event(self._on_scroll_end, lv.EVENT.SCROLL_END, None)
+        self._scroll_cb = self._on_scroll
+        self._scroll_end_cb = self._on_scroll_end
+        self._scroll.add_event(self._scroll_cb, lv.EVENT.SCROLL, None)
+        self._scroll.add_event(self._scroll_end_cb, lv.EVENT.SCROLL_END, None)
 
         # 初始选中第一张并吸附居中（_scroll_to 内部会调用 _update_selection）
         print("[MainMenu] initial scroll_to(0)...")
@@ -257,20 +275,69 @@ class MainMenu:
     # ── 滚动回调 ──────────────────────────────────────
 
     def _on_scroll(self, event):
-        """滚动中：实时更新卡片缩放/透明度"""
+        """滚动中：按卡片距视口中心的距离更新视觉，不创建 Python 动画。"""
         self._is_scrolling = True
-        self._update_snap()
+        self._apply_scroll_visuals(update_selection=True)
+        self._diag_mem_tick("scroll")
 
     def _on_scroll_end(self, event):
-        """滚动结束 → 吸附 + 响一声蜂鸣确认"""
+        """滚动结束 → 吸附到最近卡片；视觉仍由距离驱动。"""
         self._is_scrolling = False
-        # 延迟执行吸附（等待惯性）
         self._snap_to_nearest()
-        # 松手吸附完成响一声确认(滚动中不响,防嘀嘀嘀;这里单独响)
-        if self.buzzer is not None:
-            self.buzzer.beep(ms=30)
+        self._apply_scroll_visuals(update_selection=True)
+        self._diag_mem_tick("scroll_end")
 
     # ── 吸附逻辑 ──────────────────────────────────────
+
+    def _apply_scroll_visuals(self, update_selection=False):
+        """DurUI 风格滚动视觉：只更新已有对象，避免滚动时分配 Python 回调。"""
+        if not self._cards:
+            return
+        center_y = self._scroll.get_scroll_y() + self._scroll.get_height() // 2
+        nearest_idx = self._find_nearest(center_y)
+        step = CARD_H + CARD_GAP
+        for card in self._cards:
+            card_cy = card.y + CARD_H // 2
+            dist = abs(card_cy - center_y)
+            t = dist / float(step)
+            if t > 1.0:
+                t = 1.0
+            card.apply_scroll_visual(t)
+        if update_selection:
+            self._selected_index = nearest_idx
+
+    def _diag_mem_tick(self, reason):
+        """板端诊断：每秒打印 mem；不在 LVGL 事件回调内主动 GC。"""
+        if not MENU_DIAG_MEM:
+            return
+        try:
+            now = time.ticks_ms()
+            if self._diag_last_ms == 0:
+                self._diag_last_ms = now
+                return
+            if time.ticks_diff(now, self._diag_last_ms) < 1000:
+                return
+            self._diag_seq += 1
+            mem = gc.mem_free()
+            print("[MainMenu-diag] seq=%d reason=%s selected=%d mem=%d" % (
+                self._diag_seq, reason, self._selected_index, mem))
+            self._diag_last_ms = now
+        except Exception as e:
+            print("[MainMenu-diag] failed: %s" % e)
+
+    def diag_after_task_handler(self):
+        """主循环安全点诊断：lv.task_handler() 返回后才允许主动 GC。"""
+        if not MENU_DIAG_MEM:
+            return
+        if MENU_DIAG_FORCE_GC_AT_SEQ <= 0:
+            return
+        if self._diag_seq != MENU_DIAG_FORCE_GC_AT_SEQ:
+            return
+        # 只触发一次，避免每轮主循环重复 GC。
+        self._diag_seq += 1
+        print("[MainMenu-diag] proactive gc begin")
+        gc.collect()
+        print("[MainMenu-diag] proactive gc end mem=%d" % gc.mem_free())
 
     def _update_snap(self):
         """滚动中:实时跟踪最近卡片,带迟滞防边界抖动,选中态变化用动画过渡。
@@ -317,39 +384,22 @@ class MainMenu:
         return best_idx
 
     def _scroll_to(self, idx, animate=True):
-        """滚动使指定卡片居中"""
+        """滚动使指定卡片居中；不再创建 Python 几何动画。"""
         if idx < 0 or idx >= len(self._cards):
             return
         card = self._cards[idx]
         target_scroll_y = card.y - (self._scroll.get_height() - CARD_H) // 2
-
-        if animate:
-            # 用 LVGL scroll_to 动画
-            self._scroll.scroll_to_y(max(0, target_scroll_y),
-                                     lv.ANIM.ON)
-        else:
-            self._scroll.scroll_to_y(max(0, target_scroll_y),
-                                     lv.ANIM.OFF)
-
-        # 吸附选中态更新(滚动中不响蜂鸣,见 _update_snap;松手吸附的蜂鸣
-        # 由 _on_scroll_end 单独处理,因滚动中已切到目标卡时此处 idx 未变会
-        # 被去重跳过,松手仍需一声确认)。
-        self._update_selection(idx, animate=animate)
+        anim = lv.ANIM.ON if animate else lv.ANIM.OFF
+        self._scroll.scroll_to_y(max(0, target_scroll_y), anim)
+        self._selected_index = idx
+        self._apply_scroll_visuals(update_selection=False)
 
     def _update_selection(self, idx, animate=True):
-        """更新选中态(几何用 ease_out 动画过渡,顺滑)。
-
-        蜂鸣职责不在本方法:滚动中切换不响(防边界抖动嘀嘀嘀),松手吸附的
-        确认蜂鸣由 _on_scroll_end 单独触发。
-        """
-        if idx == self._selected_index:
+        """更新选中索引；视觉由 _apply_scroll_visuals 根据距离统一计算。"""
+        if idx < 0 or idx >= len(self._cards):
             return
-
         self._selected_index = idx
-
-        # 更新视觉:选中卡展开满宽,其余收拢窄宽,均用动画过渡
-        for i, card in enumerate(self._cards):
-            card.set_visual_state(i == idx, animate=animate)
+        self._apply_scroll_visuals(update_selection=False)
 
     # ── 点击 ──────────────────────────────────────────
 
@@ -403,9 +453,9 @@ class _CardSlot:
         self.buzzer = buzzer
         self.lang = lang
         self.on_click = on_click
-        self._selected = None    # None=未初始化，确保首次 set_visual_state 必应用几何
-        self._geom_anim = None   # 当前几何动画(防重叠)
-        self._anim_token = 0     # 几何动画版本号:新动画+1,旧 cb 检测过期即 return
+        self._selected = None
+        self._last_visual_key = None
+        self._click_cb = None
 
         # ── 卡片容器 ──
         print(f"  [Card #{index}] creating obj...")
@@ -481,10 +531,11 @@ class _CardSlot:
                                   ICON_LEFT_PAD, 0)
 
         # ── 点击事件 ──
-        self.obj.add_event(self._on_click_event, lv.EVENT.CLICKED, None)
+        self._click_cb = self._on_click_event
+        self.obj.add_event(self._click_cb, lv.EVENT.CLICKED, None)
 
-        # 初始状态：非选中
-        self.set_visual_state(False)
+        # 初始状态：远离中心的非选中视觉
+        self.apply_scroll_visual(1.0)
 
     def _make_placeholder_icon(self):
         """图标缺失时的占位色块"""
@@ -538,122 +589,55 @@ class _CardSlot:
     # ── 视觉状态 ──────────────────────────────────────
 
     def set_visual_state(self, selected, animate=True):
-        """切换选中/非选中态。
-
-        几何只改宽度与水平位置，高度与纵向 y 恒定 → 滚动时无逐帧重排，
-        更流畅。吸附(选中)卡满宽 612 居中、不发光；未吸附卡变窄并靠右
-        （右边缘与选中卡对齐）、半透明。
-
-        animate=True(吸附/选中切换)用 ease_out 动画过渡宽窄与位置,顺滑；
-        animate=False(首次初始化/滚动中批量刷新)瞬时应用,避免逐帧动画堆积。
-        opa(透明度)始终瞬时切(LVGL 自身 opa 过渡开销大且此处变化小)。
-        """
-        if selected == self._selected:
-            return
+        """兼容旧调用：选中=中心视觉，非选中=远离中心视觉。"""
         self._selected = selected
+        self.apply_scroll_visual(0.0 if selected else 1.0)
 
-        if selected:
-            self.obj.set_style_opa(OPA_SELECTED, 0)
-            target_w = CARD_W
-        else:
-            self.obj.set_style_opa(OPA_NORMAL, 0)
-            target_w = CARD_W_NORMAL
-
-        if animate and self.obj is not None:
-            self._animate_geometry(target_w)
-        else:
-            self._apply_geometry(target_w)
-
-    def _stop_geom_anim(self):
-        """使当前几何动画失效(版本号+1),旧 cb 检测过期后不再改几何。
-
-        K230 LVGL 绑定无可靠的可移植 anim 删除 API('del' 是 Python 关键字无法
-        直接调用 lv.anim_t.del)。改用版本号:每张卡记 _anim_token,新动画 +1,
-        旧 _anim_cb 闭包捕获启动时的 token,执行时若与当前 token 不符即 return,
-        不再 set_size/set_pos。这样快速滚动时多个动画闭包并存,只有最新一个
-        能写几何,旧的自动失效 → 卡片最终停在正确宽度,不会"没缩回去"。
-        """
-        self._anim_token = (self._anim_token + 1) & 0xFFFF
-        self._geom_anim = None
-
-    def _animate_geometry(self, target_w):
-        """ease_out 过渡卡片宽度/水平位置到 target_w(高度/纵向 y 恒定)。
-
-        右边缘对齐模型:x = right_edge - width。宽度从当前值动画到 target_w,
-        x 随之连续变化 → 卡片"收拢/展开"顺滑,而非瞬时硬跳。
-        """
+    def apply_scroll_visual(self, t):
+        """按距中心归一化值更新视觉；t=0 选中，t=1 非选中。"""
         if self.obj is None:
             return
-        self._stop_geom_anim()
-        try:
-            cur_w = self.obj.get_width()
-        except Exception:
-            cur_w = CARD_W_NORMAL
-        if cur_w == target_w:
-            # 已在目标宽度,直接归位防漂移
-            self._apply_geometry(target_w)
+        if t < 0.0:
+            t = 0.0
+        elif t > 1.0:
+            t = 1.0
+
+        zoom = int(ZOOM_SELECTED - t * (ZOOM_SELECTED - ZOOM_NORMAL))
+        opa = int(OPA_SELECTED - t * (OPA_SELECTED - OPA_NORMAL))
+        dx = int(t * CARD_SHIFT_X)
+        x = self.center_x - CARD_W // 2 + dx
+
+        # Quantize to avoid repeatedly writing identical style values on tiny scroll jitter.
+        key = (zoom, opa, x)
+        if key == self._last_visual_key:
             return
+        self._last_visual_key = key
 
-        # _stop_geom_anim 已使 _anim_token +1,本动画持有该 token
-        my_token = self._anim_token
-
-        anim = lv.anim_t()
-        anim.init()
-        anim.set_var(self.obj)
-        anim.set_values(0, 100)
-        anim.set_time(GEOM_ANIM_TIME)
-        anim.set_repeat_count(1)
-        anim.set_path_cb(lv.anim_t.path_ease_out)
-
-        right_edge = self.center_x + CARD_W // 2
-        start_w = cur_w
-
-        def _anim_cb(a, progress):
-            # 版本号不符=有更新的动画启动了,本闭包失效,不再改几何
-            if my_token != self._anim_token:
-                return
-            t = progress / 100.0  # 0..1
-            w = int(start_w + (target_w - start_w) * t)
-            x = right_edge - w
-            self.obj.set_size(w, CARD_H)
-            self.obj.set_pos(x, self.y)
-
-        anim.set_custom_exec_cb(_anim_cb)
-        self._geom_anim = anim
-        lv.anim_t.start(anim)
-
-    def _apply_geometry(self, width):
-        """按给定宽度布局卡片：高度统一 CARD_H，纵向 y 固定，右边缘对齐。
-
-        选中卡宽 CARD_W 时水平居中；未选中卡较窄时右边缘仍与居中卡右缘
-        对齐 → 视觉上向右收拢。瞬时应用(无动画)。
-        """
-        right_edge = self.center_x + CARD_W // 2
-        x = right_edge - width
-        self.obj.set_size(width, CARD_H)
+        try:
+            self.obj.set_style_transform_pivot_x(CARD_W // 2, 0)
+            self.obj.set_style_transform_pivot_y(CARD_H // 2, 0)
+            self.obj.set_style_transform_zoom(zoom, 0)
+        except Exception:
+            # Fallback keeps the menu usable if transform_zoom is unavailable.
+            width = int(CARD_W_NORMAL + (1.0 - t) * (CARD_W - CARD_W_NORMAL))
+            self.obj.set_size(width, CARD_H)
+            x = self.center_x + CARD_W // 2 - width
+        self.obj.set_style_opa(opa, 0)
         self.obj.set_pos(x, self.y)
 
     def press_animation(self):
-        """点击压下动画：宽度 0.95→1.0，100ms（高度/纵向恒定，保持居中）"""
-        anim = lv.anim_t()
-        anim.init()
-        anim.set_var(self.obj)
-        anim.set_values(0, 100)  # 进度 0→100
-        anim.set_time(100)
-        anim.set_repeat_count(1)
-        anim.set_path_cb(lv.anim_t.path_ease_in_out)
-
-        def _anim_cb(a, progress):
-            """进度 0→100 对应宽度 0.95→1.0 倍 CARD_W，水平居中"""
-            t = progress / 100.0  # 0..1
-            sc = 0.95 + t * 0.05  # 0.95→1.0
-            w = int(CARD_W * sc)
+        """点击反馈：瞬时轻微收缩，避免创建 Python 自定义动画回调。"""
+        if self.obj is None:
+            return
+        try:
+            w = int(CARD_W * 0.95)
             x = self.center_x - w // 2
             self.obj.set_size(w, CARD_H)
             self.obj.set_pos(x, self.y)
-
-        anim.set_custom_exec_cb(_anim_cb)
-        lv.anim_t.start(anim)
+            self.obj.set_size(CARD_W, CARD_H)
+            self.obj.set_pos(self.center_x - CARD_W // 2, self.y)
+        except Exception:
+            pass
 
     def refresh_text(self):
         """刷新卡片文字（语言切换后调用）"""

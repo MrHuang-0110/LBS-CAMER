@@ -27,6 +27,19 @@ WARM_BOOT_PATH = "/sdcard/CamerAi/.warm_boot"
 
 
 def _read_next_script():
+    """读 .next_script。用 os.stat 预检查避免 open() ENOENT 异常污染 K230 状态。
+
+    ⚠️ 坑#18 变体(2026-06-30 定位):开机 main() 调本函数,open() 对不存在的
+    .next_script 抛 ENOENT 异常,污染 K230 FATFS/全局状态,后续 Display/MediaManager/
+    LVGL 在 GC 后撞上污染状态卡死(主菜单 GC 后死机的真根因)。probe 当 main.py 直跑
+    不死,正是因为它不读 .next_script、没有这次 open 异常。
+
+    解法(同坑#18):os.stat 预检查,文件不存在直接返回 None,不触发 open 异常。
+    """
+    try:
+        os.stat(NEXT_SCRIPT_PATH)
+    except Exception:
+        return None
     try:
         with open(NEXT_SCRIPT_PATH, "r") as f:
             cid = f.read().strip()
@@ -132,8 +145,11 @@ def run_menu():
     while True:
         os.exitpoint()
         _th = lv.task_handler()
+        menu.diag_after_task_handler()
         runtime.host_tick()
         time.sleep_ms(_th if _th > 0 else 5)
+
+
 
 
 def run_script(category_id):
@@ -170,6 +186,7 @@ def main():
     print("=" * 40)
     print("  CamerAi v0.2.0 (reset-switch)")
     print("=" * 40)
+
     next_script = _read_next_script()
     if next_script:
         print("[CamerAi] script mode: %s" % next_script)

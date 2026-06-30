@@ -14,7 +14,7 @@ import os
 from media.display import Display
 from media.media import MediaManager
 from media.sensor import Sensor, CAM_CHN_ID_0, CAM_CHN_ID_1, CAM_CHN_ID_2
-from machine import Pin, FPIOA
+from machine import Pin, FPIOA, TOUCH
 import image
 import lvgl as lv
 import time
@@ -55,6 +55,13 @@ class AppRuntime:
                           to_ide=to_ide, osd_num=2, quality=100)
         MediaManager.init()
 
+    def _init_menu_display_and_media(self, to_ide=False):
+        """主菜单专用显示链路：对齐 DurUI，不申请 OSD2 分层。"""
+        self.display = Display()
+        self.display.init(Display.ST7701, self.width, self.height,
+                          to_ide=to_ide, quality=100)
+        MediaManager.init()
+
     def _init_backlight(self, fpioa, bl_pinx=5, bl_valid=1):
         fpioa.set_function(bl_pinx, fpioa.GPIO0 + bl_pinx)
         pull = Pin.PULL_UP if bl_valid == 0 else Pin.PULL_DOWN
@@ -70,31 +77,54 @@ class AppRuntime:
             self.sensor.set_framesize(framesize, chn=chn_id)
             self.sensor.set_pixformat(pixformat, chn=chn_id)
 
-    def _lvgl_init(self, render_mode=lv.DISP_RENDER_MODE.FULL):
+    def _lvgl_init(self, render_mode=lv.DISP_RENDER_MODE.FULL, opaque_bg=False):
         self.draw_buf_1 = image.Image(self.width, self.height, image.BGRA8888)
         self.draw_buf_2 = image.Image(self.width, self.height, image.BGRA8888)
-        self.draw_buf_1.clear()
-        self.draw_buf_2.clear()
+        if opaque_bg:
+            # 主菜单无底层相机画面，DIRECT 模式下须先铺不透明纯黑(alpha=255)，
+            # 否则 clear() 把 alpha 清成 0 → 全透明 → 屏幕黑屏/不显示。
+            # 对齐 DurUI lvgl_init 的缓冲初始铺黑。
+            for _fb in (self.draw_buf_1, self.draw_buf_2):
+                _fb.draw_rectangle(0, 0, self.width, self.height,
+                                   color=(0, 0, 0), thickness=1, fill=True)
+        else:
+            self.draw_buf_1.clear()
+            self.draw_buf_2.clear()
         self.lv_disp = lv.disp_create(self.width, self.height)
         self.lv_disp.set_flush_cb(self._flush_cb)
-        self.lv_disp.set_color_format(lv.COLOR_FORMAT.ARGB8888)
+        # 主菜单(DurUI 栈)对齐 DurUI probe：不设 color_format。
+        # set_color_format(ARGB8888) 与 BGRA8888 字节序不匹配，DIRECT 下黑屏。
+        # 脚本模式(FULL+OSD2)保留 set_color_format，历来工作正常。
+        if not opaque_bg:
+            self.lv_disp.set_color_format(lv.COLOR_FORMAT.ARGB8888)
         self.lv_disp.set_draw_buffers(
             self.draw_buf_1.bytearray(), self.draw_buf_2.bytearray(),
             self.draw_buf_1.size(), render_mode)
 
     def _flush_cb(self, disp, area, px_map):
-        """LVGL flush 回调（对齐官方 ai_lvgl.py disp_drv_flush_cb）。"""
+        """LVGL flush 回调。
+
+        主菜单对齐 DurUI：DIRECT + 单层 show_image，不指定 OSD2、不清缓冲。
+        脚本模式保留 FULL + OSD2 + 清非活跃缓冲，避免影响摄像头叠加层。
+        """
         if self.draw_buf_1 is None or self.draw_buf_2 is None:
             disp.flush_ready()
             return
         if disp.flush_is_last():
-            if self.draw_buf_1.virtaddr() == uctypes.addressof(
-                    px_map.__dereference__()):
-                self.draw_buf_2.bytearray()[:] = bytearray(0)
-                self.display.show_image(self.draw_buf_1, layer=Display.LAYER_OSD2)
+            if self.category_id == "main_menu":
+                if self.draw_buf_1.virtaddr() == uctypes.addressof(
+                        px_map.__dereference__()):
+                    self.display.show_image(self.draw_buf_1)
+                else:
+                    self.display.show_image(self.draw_buf_2)
             else:
-                self.draw_buf_1.bytearray()[:] = bytearray(0)
-                self.display.show_image(self.draw_buf_2, layer=Display.LAYER_OSD2)
+                if self.draw_buf_1.virtaddr() == uctypes.addressof(
+                        px_map.__dereference__()):
+                    self.draw_buf_2.bytearray()[:] = bytearray(0)
+                    self.display.show_image(self.draw_buf_1, layer=Display.LAYER_OSD2)
+                else:
+                    self.draw_buf_1.bytearray()[:] = bytearray(0)
+                    self.display.show_image(self.draw_buf_2, layer=Display.LAYER_OSD2)
             time.sleep(0.01)
         disp.flush_ready()
 
@@ -106,16 +136,44 @@ class AppRuntime:
         self.touch.lvgl_init()
         self.touch.hw_init()
 
+    def _init_menu_touch(self):
+        """主菜单专用触摸：逐行照搬 DurUI probe 的 Touch（直接 TOUCH(0) + 裸 read_cb）。
+
+        probe（GC 后不死）与 run_menu（GC 后死）显示栈对齐后仍差异于此：
+        probe 直接构造 TOUCH(0)，read_cb 无 try/except；hw/touch.Touch 延迟到
+        hw_init() 构造并用 try/except 包 read。主菜单对齐 probe 以隔离该变量。
+        脚本模式仍用 _init_touch（hw/touch）。
+        """
+        touch_obj = TOUCH(0)
+
+        def _read_cb(indev, data):
+            x, y, state = 0, 0, lv.INDEV_STATE.RELEASED
+            tp = touch_obj.read(1)
+            if len(tp):
+                x, y, event = tp[0].x, tp[0].y, tp[0].event
+                if event in (TOUCH.EVENT_DOWN, TOUCH.EVENT_MOVE):
+                    state = lv.INDEV_STATE.PRESSED
+            data.point = lv.point_t({'x': x, 'y': y})
+            data.state = state
+
+        indev = lv.indev_create()
+        indev.set_type(lv.INDEV_TYPE.POINTER)
+        indev.set_read_cb(_read_cb)
+        # 保活：touch_obj 与 _read_cb 闭包须挂在 self 上，防 GC 后 C 侧悬空。
+        self._menu_touch = touch_obj
+        self._menu_touch_cb = _read_cb
+        self._menu_indev = indev
+        self.touch = None  # 主菜单不走 hw/touch
+
     def init_menu(self, fpioa):
-        """主菜单模式 init：Display/MediaManager/sensor(chn0)/LVGL/触摸/字体/图标/host。"""
+        """主菜单模式 init：DurUI 风格 LCD-only 显示链路 + LVGL/触摸/字体/图标/host。"""
         self.fpioa = fpioa
         self.category_id = "main_menu"
-        self._config_sensor([(CAM_CHN_ID_0, Sensor.VGA, Sensor.RGB888)])
-        self._init_display_and_media()
+        self._init_menu_display_and_media()
         self._init_backlight(fpioa)
         lv.init()
-        self._lvgl_init()
-        self._init_touch()
+        self._lvgl_init(lv.DISP_RENDER_MODE.DIRECT, opaque_bg=True)
+        self._init_menu_touch()
         from core.font_manager import fonts
         try:
             fonts.load_all()
