@@ -10,6 +10,8 @@
 # 持久化预留:flush_to_disk 当前 no-op。K230 坑#2:运行时 SD 写与 display
 # flush 抢 DMA,故运行时只改内存,退出刷盘。
 
+from core import db_store
+
 
 class ColorDB:
     """颜色 ID 内存库。每槽存 6 阈值 + 中心 LAB + RGB。
@@ -75,15 +77,40 @@ class ColorDB:
         """遍历所有槽 entry(供每帧检测用)。"""
         return self._features.values()
 
-    def flush_to_disk(self):
-        """退出时刷盘(预留)。当前 no-op,仅复位 dirty 标志。"""
-        if self._clear_dirty:
-            print("[ColorDB] exit: clear intent recorded (persistence disabled)")
-        elif self._dirty:
-            print("[ColorDB] exit: %d color(s) pending (persistence disabled)"
-                  % len(self._features))
-        self._clear_dirty = False
+    def _serialize(self):
+        slots = {}
+        for slot_id, entry in self._features.items():
+            slots[str(slot_id)] = {
+                "threshold": list(entry['threshold']),
+                "lab": list(entry['lab']),
+                "rgb": entry['rgb'],
+            }
+        return {"next_slot": self._next_slot, "slots": slots}
+
+    def load_from_disk(self, path):
+        """启动加载。db_store os.stat 预检查,文件不存在返回 None(避 ENOENT)。"""
+        data = db_store.load_json(path)
+        if data is None:
+            return None
+        try:
+            self._next_slot = data.get("next_slot", 1)
+            for slot_str, entry in data.get("slots", {}).items():
+                # threshold 转回 tuple(find_blobs 比较用;json 存 list)
+                self._features[int(slot_str)] = {
+                    'threshold': tuple(entry['threshold']),
+                    'lab': tuple(entry['lab']),
+                    'rgb': entry['rgb'],
+                }
+        except Exception as e:
+            print("[ColorDB] load parse failed: %s" % e)
+        return self._features
+
+    def flush_to_disk(self, path):
+        """注册即写 / 退出兜底。open('w') 不抛 ENOENT。"""
+        db_store.save_json(path, self._serialize())
         self._dirty = False
+        self._clear_dirty = False
+        print("[ColorDB] flushed %d color(s) to %s" % (len(self._features), path))
 
     @property
     def count(self):
