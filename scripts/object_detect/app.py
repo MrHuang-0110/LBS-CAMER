@@ -149,6 +149,7 @@ def on_frame(img):
             slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
                                              registrar=_db.register)
             if slot is not None:
+                _db.flush_to_disk(_OBJ_DB_PATH)
                 _refresh_count()
         except Exception as e:
             print("[object_detect] register error: %s" % e)
@@ -406,7 +407,9 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _db
     _RUNTIME = runtime
+    _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
     _db = ObjectDB()
+    _db.load_from_disk(_OBJ_DB_PATH)
     exit_flag = [False]
     _init_ai()
     _init_registry(runtime.fpioa)
@@ -436,5 +439,5 @@ def run(runtime):
         _deinit_ai()
         _destroy_ui()
         if _db is not None:
-            _db.flush_to_disk()
+            _db.flush_to_disk(_OBJ_DB_PATH)
         _RUNTIME = None
