@@ -668,6 +668,8 @@ def on_frame(img):
             (cur_th, lab_mid), _RUNTIME.buzzer,
             registrar=lambda th: _color_db.register(th, rgb=latest_rgb))
         if slot is not None:
+            _color_db.flush_to_disk(_COLOR_DB_PATH)  # 注册即写（on_frame 内，task_handler 前）
+        if slot is not None:
             _refresh_count()
             print("[color_detect] registered -> ID%d (lab=%r)" % (slot, lab_mid))
         else:
@@ -714,7 +716,9 @@ def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
     global _RUNTIME, _color_db
     _RUNTIME = runtime
+    _COLOR_DB_PATH = "/sdcard/CamerAi/data/color_db.json"
     _color_db = ColorDB()
+    _color_db.load_from_disk(_COLOR_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
     exit_flag = [False]
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
@@ -742,5 +746,5 @@ def run(runtime):
     finally:
         _destroy_ui()
         if _color_db is not None:
-            _color_db.flush_to_disk()
+            _color_db.flush_to_disk(_COLOR_DB_PATH)
         _RUNTIME = None
