@@ -15,9 +15,23 @@ import json
 DATA_DIR = "/sdcard/CamerAi/data"
 
 
+def _dirname(path):
+    """取 path 所在目录（字符串切片）。MicroPython 标准库 os 无 path 子模块，
+    不能调 os 的 path 接口（板端报 'module' object has no attribute 'path'）。
+    兼容正斜杠(K230)与反斜杠(PC 测试)。"""
+    if not path:
+        return ""
+    i = path.rfind("/")
+    j = path.rfind("\\")
+    k = i if i > j else j
+    if k < 0:
+        return ""
+    return path[:k]
+
+
 def ensure_data_dir(path=None):
     """确保 path 所在目录存在。path=None 时确保 DATA_DIR。MicroPython 无 os.makedirs。"""
-    d = DATA_DIR if path is None else os.path.dirname(path)
+    d = DATA_DIR if path is None else _dirname(path)
     if not d:
         return
     try:

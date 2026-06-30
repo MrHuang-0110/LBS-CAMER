@@ -48,3 +48,13 @@ def test_save_json_creates_data_dir():
         d = os.path.dirname(nested)
         if os.path.exists(d):
             os.rmdir(d)
+
+
+def test_db_store_does_not_use_os_path():
+    """db_store must not use os.path — MicroPython has no os.path module
+    (would raise 'module' object has no attribute 'path' on K230). Use
+    string slicing for dirname instead. Source-contract guard."""
+    src_path = os.path.join(os.path.dirname(__file__), "..", "core", "db_store.py")
+    with open(src_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    assert "os.path" not in src, "db_store must not use os.path (MicroPython-incompatible)"
