@@ -138,6 +138,7 @@ def on_frame(img):
                 feature = _face_reg.run(img_np)
                 slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
                 if slot is not None:
+                    face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
                     _db_features[slot] = feature
                     recognition_results.append((max_i, slot))
                     if 1 <= slot <= 4:
@@ -435,4 +436,4 @@ def run(runtime):
         _deinit_ai()
         _destroy_ui()
         _RUNTIME = None
-        face_db.flush_to_disk()  # 持久化预留接口（当前 no-op，路径待定）
+        face_db.flush_to_disk()  # 退出兜底写盘（注册即写已在 on_frame 完成；默认 FACE_DB_PATH）
