@@ -93,7 +93,9 @@ label_idx(0-3),匹配=标签相等,score=检测 softmax 置信度。模型是固
   - K2 pending 时:取最大手(area)的 label_idx →
     `slot = _id_registry.try_register(label_idx, _RUNTIME.buzzer, registrar=gesture_db.register)`
     → `gesture_db.flush_to_disk()` + `_db_slots[slot]=label_idx` + `_refresh_count()`
-  - **不画十字**(对齐 road_detect 用户反馈"不需要十字架",手势场景无对准意义)
+  - **画十字**:对齐 face_detect,画屏幕居中绿色十字(VGA 640×480 中心 (320,240),
+    `img.draw_cross(320, 240, color=(0xFF,0x00,0xFF,0x00), size=20, thickness=2)`),
+    作手部对准参考
   - 画框:每只手矩形 + 标签文本(手势名 + 匹配 ID,如 "yeah #1");未匹配只显手势名
   - `_RUNTIME.host_tick(slots)`;`gc.collect()`
 - `_init_registry(fpioa)`:`IdRegistry(fpioa, pin=0)`(复用,传 registrar)
