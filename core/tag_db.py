@@ -9,6 +9,8 @@
 # 持久化路径待定(同 face_db):flush_to_disk 当前 no-op,后续决定存哪。
 # K230 坑#2:运行时 SD 写与 display flush 抢 DMA,故运行时只改内存,退出刷盘。
 
+from core import db_store
+
 
 class TagDB:
     """标签 ID 内存库。code_id 由调用方决定类型(int/str)。"""
@@ -57,15 +59,29 @@ class TagDB:
         self._next_slot = 1
         print("[TagDB] cleared (memory, clear_dirty)")
 
-    def flush_to_disk(self):
-        """退出时刷盘(预留)。⚠️ 持久化路径待定,当前 no-op,仅复位 dirty 标志。"""
-        if self._clear_dirty:
-            print("[TagDB] exit: clear intent recorded (persistence disabled)")
-        elif self._dirty:
-            print("[TagDB] exit: %d code(s) pending (persistence disabled)"
-                  % len(self._features))
-        self._clear_dirty = False
+    def _serialize(self):
+        return {"next_slot": self._next_slot,
+                "slots": {str(k): v for k, v in self._features.items()}}
+
+    def load_from_disk(self, path):
+        """启动加载。db_store os.stat 预检查,文件不存在返回 None（避 ENOENT）。"""
+        data = db_store.load_json(path)
+        if data is None:
+            return None
+        try:
+            self._next_slot = data.get("next_slot", 1)
+            for slot_str, code_id in data.get("slots", {}).items():
+                self._features[int(slot_str)] = code_id
+        except Exception as e:
+            print("[TagDB] load parse failed: %s" % e)
+        return self._features
+
+    def flush_to_disk(self, path):
+        """注册即写 / 退出兜底。open('w') 不抛 ENOENT。"""
+        db_store.save_json(path, self._serialize())
         self._dirty = False
+        self._clear_dirty = False
+        print("[TagDB] flushed %d code(s) to %s" % (len(self._features), path))
 
     @property
     def count(self):
