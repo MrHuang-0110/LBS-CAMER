@@ -31,12 +31,6 @@ OBJ_RECO_KMPATH = "/sdcard/examples/kmodel/recognition.kmodel"
 # 每帧最多提特征的检测框数(控推理量:1 次 yolov8n + N 次 recognition)
 MAX_DET_BOXES = 5
 
-# manual 锁定模式:按中心 crop 的固定大小(rgb888p 空间)。
-# 显示空间 120×120 × (rgb888p/display 缩放比 ~1.6) ≈ 192;取 192。
-MANUAL_CROP_SIZE = 192
-# manual 网格搜索步长(±offset),= crop 边长一半。
-MANUAL_GRID_OFFSET = MANUAL_CROP_SIZE // 2
-
 
 def ALIGN_UP(x, align=16):
     return (x + align - 1) // align * align
@@ -73,33 +67,6 @@ class FeatureExtractionApp(AIBase):
         with ScopedTiming("set preprocess config", self.debug_mode > 0):
             ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
             self.crop_params = self._get_crop_param(det_box)
-            self.ai2d.crop(self.crop_params[0], self.crop_params[1],
-                           self.crop_params[2], self.crop_params[3])
-            self.ai2d.resize(nn.interp_method.tf_bilinear, nn.interp_mode.half_pixel)
-            self.ai2d.build([1, 3, ai2d_input_size[1], ai2d_input_size[0]],
-                            [1, 3, self.model_input_size[1], self.model_input_size[0]])
-
-    def config_preprocess_center(self, cx, cy, box_size, input_image_size=None):
-        """按中心 (cx,cy) crop box_size×box_size 固定大小区域(供 manual 锁定/网格搜索)。
-
-        与 config_preprocess 区别:crop 区域是以为中心的正方形(边长 box_size),
-        不走 _get_crop_param 的 1.26 倍放大。中心 clamp 使 crop 不越画面。
-        """
-        gc.collect()
-        with ScopedTiming("set preprocess config", self.debug_mode > 0):
-            ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
-            half = box_size // 2
-            x1 = int(max(0, cx - half))
-            y1 = int(max(0, cy - half))
-            x2 = int(min(self.rgb888p_size[0], cx + half))
-            y2 = int(min(self.rgb888p_size[1], cy + half))
-            w = x2 - x1
-            h = y2 - y1
-            if w < 2 or h < 2:
-                # 中心贴边致 crop 过小:用最小有效 crop 保 ai2d 不崩
-                w = max(2, w)
-                h = max(2, h)
-            self.crop_params = [x1, y1, w, h]
             self.ai2d.crop(self.crop_params[0], self.crop_params[1],
                            self.crop_params[2], self.crop_params[3])
             self.ai2d.resize(nn.interp_method.tf_bilinear, nn.interp_mode.half_pixel)
@@ -207,19 +174,6 @@ class ObjectClassifyRecognition:
             det_res.append(d)
             feat_res.append(feature)
         return det_res, feat_res
-
-    def extract_feature_at(self, img_np, cx, cy, box_size=MANUAL_CROP_SIZE):
-        """按中心 crop 固定大小区域提单特征(供 manual 锁定)。返回特征向量。"""
-        self.feature.config_preprocess_center(cx, cy, box_size)
-        return self.feature.run(img_np)
-
-    def extract_features_at_centers(self, img_np, centers, box_size=MANUAL_CROP_SIZE):
-        """对多个候选中心各 crop 提特征(供 manual 网格搜索)。返回特征列表(与 centers 等长)。"""
-        feats = []
-        for (cx, cy) in centers:
-            self.feature.config_preprocess_center(cx, cy, box_size)
-            feats.append(self.feature.run(img_np))
-        return feats
 
     def deinit(self):
         try:

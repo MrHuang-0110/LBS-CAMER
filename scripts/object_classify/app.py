@@ -15,12 +15,10 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.object_classify_ai import ObjectClassifyRecognition, \
-    OBJ_DET_KMPATH, OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE, \
-    MANUAL_CROP_SIZE, MANUAL_GRID_OFFSET
+    OBJ_DET_KMPATH, OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
 from core.object_classify_db import object_classify_db, database_search, \
     to_feature_list, OBJECT_CLASSIFY_DB_PATH
-from core.object_classify_lock import select_lock_index, pick_box_at_point, \
-    grid_centers, best_grid_match
+from core.object_classify_lock import select_lock_index, pick_box_at_point
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -36,8 +34,6 @@ BOX_COLORS = {
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
 BOX_LOCK = 0xFFD700      # 锁定高亮黄框
-# manual 模式黄框固定大小(显示空间 120×120)。rgb888p 的 MANUAL_CROP_SIZE 映射回显示空间。
-MANUAL_BOX_DISP = 120
 
 
 def _draw_color(hex_color):
@@ -58,8 +54,6 @@ _id_registry = None
 _ocr = None                 # ObjectClassifyRecognition
 _db_features = {}
 _locked_feature = None      # 锁定特征(plain list,跨帧持有);None=未锁定
-_locked_mode = None         # "yolo"(点中框)/ "manual"(没点中框)/ None(未锁定)
-_locked_center = None       # manual 模式上一帧中心(rgb888p 空间);yolo/None 时不用
 _pending_click = None       # (x,y) 待处理触摸点(VGA 空间),或 None
 _overlay = None
 _clear_btn = None
@@ -107,7 +101,7 @@ def on_frame(img):
     LOCK);低于阈值 → 锁定丢失,自动解锁。未锁定:每框 database_search,命中槽画彩框+
     ID#,未命中白框。触摸点击命中框 → 锁定该框特征;点空白 → 解锁。K2 注册当前锁定特征。
     """
-    global _locked_feature, _locked_mode, _locked_center, _pending_click
+    global _locked_feature, _pending_click
     if _RUNTIME is None or _ocr is None:
         return
     img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
@@ -132,38 +126,20 @@ def on_frame(img):
     filled = set()
 
     # 触摸点击处理(优先,可能改变锁定态)
-    # 点中 YOLO 框 → yolo 模式(用该框特征);没点中框 → manual 模式(点击点 crop 提特征,
-    # 支持 YOLO 没检测到的物体);点空白 → 解锁。
     if _pending_click is not None:
         px, py = _pending_click
         _pending_click = None
         idx = pick_box_at_point(disp_boxes, px, py)
         if idx is not None and idx < len(features):
-            # 点中框:用该框已提取特征,yolo 模式紧框跟踪
+            # 拷成 plain list 跨帧持有(避 ulab ndarray 缓冲被 NPU 复用)
             _locked_feature = to_feature_list(features[idx])
-            _locked_mode = "yolo"
-            _locked_center = None
             if _RUNTIME.buzzer is not None:
                 _RUNTIME.buzzer.beep(ms=50)
         else:
-            # 没点中框:点击点映射到 rgb888p,crop 固定大小提特征 → manual 模式
-            cx_ai = px * RGB888P_SIZE[0] // DISPLAY_SIZE[0]
-            cy_ai = py * RGB888P_SIZE[1] // DISPLAY_SIZE[1]
-            try:
-                feat = _ocr.extract_feature_at(img_np, cx_ai, cy_ai)
-                _locked_feature = to_feature_list(feat)
-                _locked_center = (cx_ai, cy_ai)
-                _locked_mode = "manual"
-                if _RUNTIME.buzzer is not None:
-                    _RUNTIME.buzzer.beep(ms=50)
-            except Exception as e:
-                print("[object_classify] manual lock error: %s" % e)
-                _locked_feature = None
-                _locked_mode = None
-                _locked_center = None
+            _locked_feature = None  # 点空白 → 解锁
 
-    if _locked_feature is not None and _locked_mode == "yolo":
-        # yolo 模式:在 YOLO 检测特征里找余弦最高,用 YOLO 框坐标(紧、变大小)
+    if _locked_feature is not None:
+        # 锁定模式:特征余弦逐帧匹配锁定目标
         idx, score = select_lock_index(_locked_feature, features)
         if idx is not None and idx < len(disp_boxes):
             x, y, w, h = disp_boxes[idx]
@@ -183,49 +159,8 @@ def on_frame(img):
         else:
             # 锁定丢失:目标离开画面/被遮挡 → 自动解锁
             _locked_feature = None
-            _locked_mode = None
 
-    elif _locked_feature is not None and _locked_mode == "manual":
-        # manual 模式:YOLO 检测不到该物体,自己在上一帧中心周围 3×3 网格搜索
-        centers = grid_centers(_locked_center, MANUAL_GRID_OFFSET,
-                               (RGB888P_SIZE[0], RGB888P_SIZE[1]))
-        try:
-            grid_feats = _ocr.extract_features_at_centers(img_np, centers)
-        except Exception as e:
-            print("[object_classify] manual track error: %s" % e)
-            grid_feats = []
-        gidx, gscore = best_grid_match(_locked_feature, grid_feats)
-        if gidx is not None:
-            # 新中心 = 命中的候选中心
-            _locked_center = centers[gidx]
-            cx_ai, cy_ai = _locked_center
-            # 映射回显示空间,画固定大小黄框(以中心为心)
-            dx = cx_ai * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-            dy = cy_ai * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            bx = dx - MANUAL_BOX_DISP // 2
-            by = dy - MANUAL_BOX_DISP // 2
-            color = _draw_color(BOX_LOCK)
-            img.draw_rectangle(bx, by, MANUAL_BOX_DISP, MANUAL_BOX_DISP,
-                               color=color, thickness=5)
-            img.draw_cross(dx, dy, color=(0xFF, 0x00, 0xD7, 0xFF),
-                           size=24, thickness=2)
-            conf = int(gscore * 100)
-            # 用命中候选的特征查 DB(注册判断)
-            slot, _sc = database_search(grid_feats[gidx], _db_features)
-            if slot is not None:
-                img.draw_string_advanced(bx + 2, by - 24, 24,
-                                         "ID%d LOCK" % slot, color=color)
-                slots[slot - 1] = (slot, bx, by, MANUAL_BOX_DISP, MANUAL_BOX_DISP, conf)
-            else:
-                img.draw_string_advanced(bx + 2, by - 24, 24, "LOCK", color=color)
-                slots[0] = (0, bx, by, MANUAL_BOX_DISP, MANUAL_BOX_DISP, conf)
-        else:
-            # 网格搜索全部低于阈值 → 锁定丢失,自动解锁
-            _locked_feature = None
-            _locked_mode = None
-            _locked_center = None
-
-    if _locked_mode is None:
+    if _locked_feature is None:
         # 未锁定模式:每框余弦匹配 DB
         for i, feat in enumerate(features):
             x, y, w, h = disp_boxes[i]
