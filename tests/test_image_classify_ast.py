@@ -38,6 +38,49 @@ def test_channels_for_image_classify_is_single_chn0():
     assert "append" not in after, "image_classify must NOT append an AI channel (preview-only)"
 
 
+def _app_src():
+    return _read(APP_PATH)
+
+
+def test_app_has_run_entry():
+    """app.py 必须有 run(runtime) 入口(reset 框架调 mod.run(runtime))。"""
+    src = _app_src()
+    assert "def run(runtime):" in src, "app must define run(runtime)"
+
+
+def test_app_has_host_tick_for_protocol_0x13():
+    """app.py on_frame 必须调 host_tick(协议 0x13 心跳)。
+
+    预览模式(_DETECTION_ENABLED=False)下每帧 host_tick(None) 推 40B 全零。
+    """
+    src = _app_src()
+    assert "host_tick" in src, "app must call host_tick for protocol 0x13"
+
+
+def test_app_detection_disabled_by_default():
+    """app.py 顶部 _DETECTION_ENABLED 必须默认 False(预览模式)。"""
+    src = _app_src()
+    assert "_DETECTION_ENABLED = False" in src, \
+        "app must default _DETECTION_ENABLED to False (preview-only)"
+
+
+def test_app_uses_back_icon_and_i18n_title():
+    """顶栏返回钮用通用 get_back_icon(),标题用 i18n category.image_classify。"""
+    src = _app_src()
+    assert "get_back_icon" in src, "back button must use shared get_back_icon()"
+    assert "category.image_classify" in src, "title must use i18n category.image_classify"
+
+
+def test_app_sets_runtime_global():
+    """run() 必须设 _RUNTIME 全局(供 _on_back 蜂鸣 + on_frame host_tick 用)。
+
+    _template/app.py 的 _on_back 引用了未定义的 _RUNTIME;image_classify 必须修正。
+    """
+    src = _app_src()
+    assert "global _RUNTIME" in src, "run must set global _RUNTIME"
+    assert "_RUNTIME = runtime" in src, "run must assign _RUNTIME = runtime"
+
+
 def test_runner():
     import sys
     mod = sys.modules[__name__]
