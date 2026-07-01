@@ -277,6 +277,10 @@ class AppRuntime:
         elif category_id == "object_classify":
             # chn2 XGA RGBP888 做 AI 推理(同 body_detect:YOLOv8n 检测 + recognition 特征)
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+        elif category_id == "image_classify":
+            # 暂时单通道 chn0 VGA RGB888 预览(不跑AI)。
+            # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并在此附加 chn2 AI 通道。
+            pass
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）
         return chs
