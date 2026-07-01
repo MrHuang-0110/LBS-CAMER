@@ -23,6 +23,21 @@ def test_image_classify_in_category_type_map():
     assert "TYPE_IMAGE_CLASSIFY" in after
 
 
+def test_channels_for_image_classify_is_single_chn0():
+    """_channels_for 的 image_classify 分支应为单 chn0(预览模式,无 AI 通道)。
+
+    显式 pass 分支镜像 road_detect,表意:本轮不附加 chn2 AI 通道。
+    """
+    src = _read(APP_RUNTIME_PATH)
+    start = src.find("def _channels_for(")
+    assert start != -1, "must define _channels_for"
+    body = src[start:start + 2200]
+    assert "image_classify" in body, "_channels_for must handle image_classify"
+    # image_classify 分支不应 append 任何 AI 通道(预览模式)
+    after = body.split('"image_classify"')[1][:200]
+    assert "append" not in after, "image_classify must NOT append an AI channel (preview-only)"
+
+
 def test_runner():
     import sys
     mod = sys.modules[__name__]
