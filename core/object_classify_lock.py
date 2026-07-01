@@ -51,3 +51,46 @@ def pick_box_at_point(boxes, px, py):
                 best_area = a
                 best_i = i
     return best_i
+
+
+def grid_centers(center, offset, bounds):
+    """生成 3×3 网格候选中心(供 manual 锁定模式网格搜索)。
+
+    Args:
+        center: (cx, cy) 上一帧中心(显示空间或 rgb888p 空间,调用方统一)。
+        offset: 搜索步长(各方向 ±offset),与 crop 边长一半同量级。
+        bounds: (w, h) 画面尺寸,候选中心 clamp 到 [0, w]×[0, h]。
+    Returns:
+        list of (cx, cy) int,9 个(3×3),已 clamp 到 bounds 内。
+    """
+    cx, cy = center
+    w, h = bounds
+    centers = []
+    for dy in (-offset, 0, offset):
+        for dx in (-offset, 0, offset):
+            nx = max(0, min(w, int(cx + dx)))
+            ny = max(0, min(h, int(cy + dy)))
+            centers.append((nx, ny))
+    return centers
+
+
+def best_grid_match(locked_feature, features, threshold=OBJECT_CLASSIFY_MATCH_THRESHOLD):
+    """在网格候选特征列表 features 中找与 locked_feature 余弦最相似的。
+
+    与 select_lock_index 同义(都是"在一组特征里找最高分"),独立命名以表达 manual
+    网格搜索语义;threshold 默认 0.75(同 DB)。
+    Returns:
+        (index, score):最匹配索引与 score;无/低于阈值 → (None, 0.0)。
+    """
+    if not features or locked_feature is None:
+        return None, 0.0
+    best_i = None
+    best_score = 0.0
+    for i, f in enumerate(features):
+        sc = cosine_score(locked_feature, f)
+        if sc > best_score:
+            best_score = sc
+            best_i = i
+    if best_score < threshold:
+        return None, 0.0
+    return best_i, best_score
