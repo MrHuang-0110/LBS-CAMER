@@ -122,6 +122,125 @@ def test_parse_switch_frame_bad_prefix():
     assert parse(frame, 0) is None
 
 
+def test_register_switch_handler_exists():
+    """HostAPI 必须有 register_switch_handler(cb)。"""
+    src = _src()
+    assert "def register_switch_handler" in src, \
+        "must define register_switch_handler(cb)"
+
+
+def test_dispatch_calls_handler_with_category():
+    """喂完整命令帧到 _rx_buf,调 poll_handshake → 回调以正确 category 调用。"""
+    HostAPI = _load_host_api_ns()["HostAPI"]
+
+    class _FakeUART:
+        def __init__(self, data):
+            self._data = bytearray(data)
+        def any(self):
+            return len(self._data)
+        def read(self, n):
+            d = self._data[:n]
+            self._data = self._data[n:]
+            return d
+
+    api = HostAPI.__new__(HostAPI)  # 跳过 __init__(避免开真 UART)
+    api._uart = _FakeUART(_make_switch_frame(0x13))
+    api._connected = False
+    api._last_handshake_ms = 0
+    api._rx_buf = bytearray()
+    api._switch_handler = None
+
+    received = []
+    api.register_switch_handler(lambda cat: received.append(cat))
+    api.poll_handshake()
+    assert received == ["image_classify"], \
+        "handler must be called with 'image_classify', got %r" % received
+
+
+def test_dispatch_half_frame_no_call():
+    """半帧(不足 8 字节)不触发回调,保留尾部等拼接。"""
+    HostAPI = _load_host_api_ns()["HostAPI"]
+
+    class _FakeUART:
+        def __init__(self, data):
+            self._data = bytearray(data)
+        def any(self):
+            return len(self._data)
+        def read(self, n):
+            d = self._data[:n]
+            self._data = self._data[n:]
+            return d
+
+    api = HostAPI.__new__(HostAPI)
+    api._uart = _FakeUART(b"\x5A\x97\xA7\x01\xFF")  # 只 5 字节(半帧)
+    api._connected = False
+    api._last_handshake_ms = 0
+    api._rx_buf = bytearray()
+    api._switch_handler = None
+
+    received = []
+    api.register_switch_handler(lambda cat: received.append(cat))
+    api.poll_handshake()
+    assert received == [], "half frame must not dispatch"
+    # 半帧尾部应保留在 _rx_buf(以 0x5A 起的尾部)
+    assert api._rx_buf == bytearray(b"\x5A\x97\xA7\x01\xFF"), \
+        "half frame tail must be retained for next poll"
+
+
+def test_dispatch_unknown_mode_no_call():
+    """未知 mode(不在 MODE_TO_CATEGORY,如 0x99)不触发回调。"""
+    HostAPI = _load_host_api_ns()["HostAPI"]
+
+    class _FakeUART:
+        def __init__(self, data):
+            self._data = bytearray(data)
+        def any(self):
+            return len(self._data)
+        def read(self, n):
+            d = self._data[:n]
+            self._data = self._data[n:]
+            return d
+
+    api = HostAPI.__new__(HostAPI)
+    api._uart = _FakeUART(_make_switch_frame(0x99))
+    api._connected = False
+    api._last_handshake_ms = 0
+    api._rx_buf = bytearray()
+    api._switch_handler = None
+
+    received = []
+    api.register_switch_handler(lambda cat: received.append(cat))
+    api.poll_handshake()
+    assert received == [], "unknown mode must not dispatch"
+
+
+def test_dispatch_mode_0x01_calls_with_none():
+    """mode=0x01 → 回调以 None 调用(回主菜单)。"""
+    HostAPI = _load_host_api_ns()["HostAPI"]
+
+    class _FakeUART:
+        def __init__(self, data):
+            self._data = bytearray(data)
+        def any(self):
+            return len(self._data)
+        def read(self, n):
+            d = self._data[:n]
+            self._data = self._data[n:]
+            return d
+
+    api = HostAPI.__new__(HostAPI)
+    api._uart = _FakeUART(_make_switch_frame(0x01))
+    api._connected = False
+    api._last_handshake_ms = 0
+    api._rx_buf = bytearray()
+    api._switch_handler = None
+
+    received = []
+    api.register_switch_handler(lambda cat: received.append(cat))
+    api.poll_handshake()
+    assert received == [None], "mode 0x01 must dispatch None (main menu)"
+
+
 def test_runner():
     import sys
     mod = sys.modules[__name__]
