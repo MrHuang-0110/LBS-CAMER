@@ -48,6 +48,51 @@ def test_icon_cache_has_object_classify_methods():
     assert "_object_classify_icons" in src
 
 
+def _app_src():
+    app_path = os.path.join(ROOT, "scripts", "object_classify", "app.py")
+    return _read(app_path)
+
+
+def test_app_imports_object_classify_ai():
+    """app.py 必须导入 object_classify_ai 的 ObjectClassifyRecognition 类。"""
+    src = _app_src()
+    assert "object_classify_ai" in src, "app must import from object_classify_ai"
+    assert "ObjectClassifyRecognition" in src, "app must import ObjectClassifyRecognition"
+
+
+def test_on_frame_uses_registrar():
+    """app.py on_frame 必须使用 try_register(..., registrar=object_classify_db.register)。"""
+    src = _app_src()
+    assert "registrar" in src, "app must use registrar pattern for K2 registration"
+    assert "object_classify_db.register" in src
+
+
+def test_has_host_tick():
+    """app.py on_frame 必须有 host_tick 调用(协议 0x0A)。"""
+    src = _app_src()
+    assert "host_tick" in src, "app must call host_tick for protocol 0x0A"
+
+
+def test_has_draw_cross():
+    """app.py on_frame 必须有 draw_cross 调用(居中十字)。"""
+    src = _app_src()
+    assert "draw_cross" in src, "app must call draw_cross for center crosshair"
+
+
+def test_has_lock_logic():
+    """app.py 必须用锁定逻辑(select_lock_index + _locked_feature)。"""
+    src = _app_src()
+    assert "select_lock_index" in src, "app must use select_lock_index for lock tracking"
+    assert "_locked_feature" in src
+
+
+def test_has_touch_pick():
+    """app.py 必须用 pick_box_at_point + _pending_click 处理点击锁定。"""
+    src = _app_src()
+    assert "pick_box_at_point" in src, "app must use pick_box_at_point for touch lock"
+    assert "_pending_click" in src
+
+
 def test_runner():
     import sys
     mod = sys.modules[__name__]
