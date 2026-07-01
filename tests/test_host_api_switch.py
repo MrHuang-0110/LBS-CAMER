@@ -71,10 +71,12 @@ def test_mode_to_category_map_values():
 
 def test_type_mode_switch_constant():
     """TYPE_MODE_SWITCH 必须 == 0xFF(命令帧 index 字段)。"""
+    import re
     src = _src()
     assert "TYPE_MODE_SWITCH" in src
-    assert "TYPE_MODE_SWITCH = 0xFF" in src or \
-           "TYPE_MODE_SWITCH=0xFF" in src
+    # 容忍对齐空格:TYPE_MODE_SWITCH <空格*> = 0xFF
+    assert re.search(r"TYPE_MODE_SWITCH\s*=\s*0xFF\b", src), \
+        "TYPE_MODE_SWITCH must be 0xFF"
 
 
 def test_parse_switch_frame_valid():

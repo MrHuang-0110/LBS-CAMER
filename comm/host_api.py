@@ -38,6 +38,15 @@ class HostAPI:
     TYPE_OBJECT_CLASSIFY = 0x12
     TYPE_IMAGE_CLASSIFY  = 0x13
 
+    # ── 主机→摄像头 脚本切换命令帧 ──
+    # 主机 _camer_changer_camer_mode 发:5A 97 A7 01 FF <mode> <chk> A5(8 字节)
+    #   [0]=HEAD [1]=src97 [2]=dstA7(=DEV_ID_CAMER) [3]=len=1
+    #   [4]=index=FF(命令) [5]=mode [6]=chk [7]=TAIL
+    TYPE_MODE_SWITCH       = 0xFF   # 命令帧 index 字段
+    MODE_SWITCH_SRC        = 0x97
+    MODE_SWITCH_DST        = 0xA7
+    MODE_SWITCH_FRAME_LEN  = 8
+
     # category_id → msg_type 映射（reset 框架 category 与协议类型码对接）
     CATEGORY_TYPE = {
         "main_menu":  TYPE_MAIN_MENU,     # 0x01
@@ -53,6 +62,22 @@ class HostAPI:
         "object_classify": TYPE_OBJECT_CLASSIFY,   # 0x0A
         "image_classify":  TYPE_IMAGE_CLASSIFY,    # 0x13
         "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
+    }
+
+    # mode → category 反向映射(主机切换命令帧的 mode 字段 → 脚本 category)。
+    # 0x01 = 回主菜单(category=None → 清 .next_script + reset)。
+    MODE_TO_CATEGORY = {
+        0x01: None,               # 主菜单
+        0x02: "camera",
+        0x03: "face_detect",
+        0x04: "tag_detect",
+        0x05: "object_detect",
+        0x06: "color_detect",
+        0x07: "road_detect",
+        0x10: "gesture_detect",
+        0x11: "body_detect",
+        0x12: "object_classify",
+        0x13: "image_classify",
     }
 
     # 握手相关
@@ -101,6 +126,28 @@ class HostAPI:
         for b in data:
             s = (s + b) & 0xFF
         return s
+
+    @staticmethod
+    def _parse_switch_frame(buf, offset):
+        """尝试在 buf[offset] 解析主机切换命令帧 8 字节。
+
+        帧: 5A 97 A7 01 FF <mode> <chk> A5
+        chk = (0x5A+0x97+0xA7+0x01+0xFF+mode) & 0xFF
+
+        Returns: (mode, next_offset) 或 None(校验失败/长度不足)。
+        """
+        if offset + 8 > len(buf):
+            return None
+        if buf[offset]     != 0x5A: return None
+        if buf[offset + 1] != 0x97: return None
+        if buf[offset + 2] != 0xA7: return None
+        if buf[offset + 3] != 0x01: return None
+        if buf[offset + 4] != 0xFF: return None
+        mode = buf[offset + 5]
+        chk = (0x5A + 0x97 + 0xA7 + 0x01 + 0xFF + mode) & 0xFF
+        if buf[offset + 6] != chk: return None
+        if buf[offset + 7] != 0xA5: return None
+        return (mode, offset + 8)
 
     def send_frame(self, msg_type, payload=b''):
         """组装并发送完整协议帧(预分配 _tx 复用,每帧零临时分配)。
