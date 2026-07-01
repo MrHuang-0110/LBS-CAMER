@@ -23,6 +23,7 @@ class _IconCache:
         self._road_icons = {}      # name → (data, dsc)
         self._gesture_icons = {}     # name -> (data, dsc)
         self._body_icons = {}     # name -> (data, dsc)
+        self._object_classify_icons = {}  # name -> (data, dsc)
 
     def preload_settings_icons(self):
         """预读设置页图标（在首次 task_handler 之前调用）"""
@@ -269,6 +270,30 @@ class _IconCache:
     def get_body_icon(self, name):
         """获取人体识别图标 (data, dsc)，未缓存返回 (None, None)"""
         return self._body_icons.get(name, (None, None))
+
+    def preload_object_classify_icons(self):
+        """预读物体分类APP图标（在首次 task_handler 之前调用）"""
+        base = "/sdcard/CamerAi/resource/icons/object_classify_icon/"
+        icons = {
+            "list": base + "list.png",
+            "back": base + "back.png",
+        }
+        for name, path in icons.items():
+            try:
+                with open(path, 'rb') as f:
+                    data = bytearray(f.read())
+                dsc = lv.img_dsc_t({
+                    'data_size': len(data),
+                    'data': data,
+                })
+                self._object_classify_icons[name] = (data, dsc)
+                print(f"[IconCache] object_classify/{name} OK ({len(data)} bytes)")
+            except Exception as e:
+                print(f"[IconCache] object_classify/{name} FAILED: {e}")
+
+    def get_object_classify_icon(self, name):
+        """获取物体分类图标 (data, dsc)，未缓存返回 (None, None)"""
+        return self._object_classify_icons.get(name, (None, None))
 
 
 # 全局单例

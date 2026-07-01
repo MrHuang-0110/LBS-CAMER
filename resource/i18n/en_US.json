@@ -106,6 +106,16 @@
     "back_fb": "Back",
     "list_fb": "List"
   },
+  "object_classify": {
+    "save": "Save",
+    "clear": "Clear",
+    "save_success": "Saved",
+    "registered": "Learned %d/4",
+    "press_k2": "Press K2 to learn locked object",
+    "lock_hint": "Tap object to lock",
+    "back_fb": "Back",
+    "list_fb": "List"
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"

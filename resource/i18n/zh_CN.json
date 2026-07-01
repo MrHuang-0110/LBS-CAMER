@@ -106,6 +106,16 @@
     "back_fb": "返回",
     "list_fb": "列表"
   },
+  "object_classify": {
+    "save": "保存",
+    "clear": "清除",
+    "save_success": "已保存",
+    "registered": "已学习 %d/4",
+    "press_k2": "按 K2 学习锁定物体",
+    "lock_hint": "点击物体锁定",
+    "back_fb": "返回",
+    "list_fb": "列表"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"
