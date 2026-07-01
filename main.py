@@ -63,6 +63,21 @@ def _clear_next_script():
         pass
 
 
+def _on_remote_switch(category):
+    """主机远程切换脚本回调(HostAPI 解析命令帧后调用)。
+
+    category=None → 回主菜单(清 .next_script + reset)。
+    category=str  → 进对应脚本(写 .next_script + reset)。
+    复用菜单点击路径(_write_next_script + machine.reset),与本地点击一致。
+    """
+    print("[CamerAi] remote switch -> %s" % ("main_menu" if category is None else category))
+    if category is None:
+        _clear_next_script()
+    else:
+        _write_next_script(category)
+    machine.reset()
+
+
 def _is_warm_boot():
     """是否热启动(reset 回菜单,非上电)。读取并删除标记(一次性消费)。"""
     try:
@@ -109,6 +124,10 @@ def run_menu():
     fpioa = FPIOA()
     runtime = AppRuntime()
     runtime.init_menu(fpioa)
+
+    # 注册主机远程切换脚本回调(主菜单态也允许被远程切走)
+    if runtime.host is not None:
+        runtime.host.register_switch_handler(_on_remote_switch)
 
     # 显式设默认屏幕纯黑背景 + radius0 + border0：消除 LVGL 默认主题四角白点
     # （BootSplash 原用全屏纯黑 obj 覆盖默认 screen；缺失后默认样式四角露白）。
@@ -158,6 +177,9 @@ def run_script(category_id):
     fpioa = FPIOA()
     runtime = AppRuntime()
     runtime.init_app(category_id, fpioa)
+    # 注册主机远程切换脚本回调(脚本态允许被远程切走/回菜单)
+    if runtime.host is not None:
+        runtime.host.register_switch_handler(_on_remote_switch)
     print("[CamerAi] loading script module...")
     mod = _load_script(category_id)
     print("[CamerAi] script module=%s has_run=%s" % (mod is not None,
