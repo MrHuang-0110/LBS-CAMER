@@ -49,6 +49,7 @@ class HostAPI:
         "color_detect": TYPE_COLOR_DETECT,  # 0x06
         "road_detect":  TYPE_ROAD_DETECT,   # 0x07
         "gesture_detect": TYPE_GESTURE_DETECT,  # 0x08
+        "body_detect":   TYPE_BODY_DETECT,     # 0x09
         "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
     }
 

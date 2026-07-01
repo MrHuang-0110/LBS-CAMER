@@ -97,6 +97,15 @@
     "back_fb": "<",
     "list_fb": "="
   },
+  "body_detect": {
+    "save": "Save",
+    "clear": "Clear",
+    "save_success": "Saved",
+    "registered": "Learned %d/4",
+    "press_k2": "Press K2 to register body",
+    "back_fb": "Back",
+    "list_fb": "List"
+  },
   "common": {
     "back": "Back",
     "app_name": "CamerAi"

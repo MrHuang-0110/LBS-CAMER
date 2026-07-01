@@ -97,6 +97,15 @@
     "back_fb": "<",
     "list_fb": "="
   },
+  "body_detect": {
+    "save": "保存",
+    "clear": "清除",
+    "save_success": "已保存",
+    "registered": "已学习 %d/4",
+    "press_k2": "按 K2 注册人体",
+    "back_fb": "返回",
+    "list_fb": "列表"
+  },
   "common": {
     "back": "返回",
     "app_name": "CamerAi"

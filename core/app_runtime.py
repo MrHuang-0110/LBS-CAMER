@@ -236,6 +236,8 @@ class AppRuntime:
             icon_cache.preload_road_icons()
         elif category_id == "gesture_detect":
             icon_cache.preload_gesture_icons()
+        elif category_id == "body_detect":
+            icon_cache.preload_body_icons()
         self._init_services(fpioa)
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
@@ -266,6 +268,9 @@ class AppRuntime:
             pass
         elif category_id == "gesture_detect":
             # chn2 XGA RGBP888 做 AI 推理(同 face_detect AI 通道)
+            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+        elif category_id == "body_detect":
+            # chn2 XGA RGBP888 做 AI 推理(同 face_detect/gesture_detect AI 通道)
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "_template":
             pass  # 模板纯显示，单通道 chn0（复用默认）

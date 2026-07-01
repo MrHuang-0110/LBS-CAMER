@@ -22,6 +22,7 @@ class _IconCache:
         self._color_icons = {}      # name → (data, dsc)
         self._road_icons = {}      # name → (data, dsc)
         self._gesture_icons = {}     # name -> (data, dsc)
+        self._body_icons = {}     # name -> (data, dsc)
 
     def preload_settings_icons(self):
         """预读设置页图标（在首次 task_handler 之前调用）"""
@@ -244,6 +245,30 @@ class _IconCache:
     def get_gesture_icon(self, name):
         """获取手势识别图标 (data, dsc)，未缓存返回 (None, None)"""
         return self._gesture_icons.get(name, (None, None))
+
+    def preload_body_icons(self):
+        """预读人体识别APP图标（在首次 task_handler 之前调用）"""
+        base = "/sdcard/CamerAi/resource/icons/body_detect_icon/"
+        icons = {
+            "list": base + "list.png",
+            "back": base + "back.png",
+        }
+        for name, path in icons.items():
+            try:
+                with open(path, 'rb') as f:
+                    data = bytearray(f.read())
+                dsc = lv.img_dsc_t({
+                    'data_size': len(data),
+                    'data': data,
+                })
+                self._body_icons[name] = (data, dsc)
+                print(f"[IconCache] body/{name} OK ({len(data)} bytes)")
+            except Exception as e:
+                print(f"[IconCache] body/{name} FAILED: {e}")
+
+    def get_body_icon(self, name):
+        """获取人体识别图标 (data, dsc)，未缓存返回 (None, None)"""
+        return self._body_icons.get(name, (None, None))
 
 
 # 全局单例
