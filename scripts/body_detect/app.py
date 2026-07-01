@@ -51,6 +51,14 @@ _person_rec = None
 _db_features = {}
 _overlay = None
 _clear_btn = None
+
+# 板端诊断:打印每个检测人体与 DB 的原始余弦(未经阈值),用于判断
+# recognition.kmodel 对人体的区分力。注册 ID1 后让另一人入镜,看 cos:
+#   cos < 0.5 → 模型有区分力,调 BODY_MATCH_THRESHOLD 即可分辨不同人;
+#   cos ≥ 0.7 → 模型对人体无区分力,"学习ID分辨个体"在此 kmodel 下不可行。
+# 验证完置 False 关闭。
+_DEBUG_DIAG = True
+_diag_fc = 0
 _save_btn = None
 _close_overlay = False
 
@@ -109,6 +117,9 @@ def on_frame(img):
     slots = [None, None, None, None]
     filled_slots = set()  # 本帧已填充的 slot(防多人体匹配同一 slot 覆盖)
 
+    global _diag_fc
+    _diag_fc += 1
+
     for det_box, feature in zip(det_boxes, features):
         x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
         # 缩放到 VGA
@@ -117,6 +128,12 @@ def on_frame(img):
         w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
         slot, score = database_search(feature, _db_features)
+        if _DEBUG_DIAG and _db_features and _diag_fc % 15 == 0:
+            # threshold=0.0 取原始最佳分数(score=cos/2+0.5 → cos=score*2-1)
+            _rid, _rscore = database_search(feature, _db_features, threshold=0.0)
+            _cos = _rscore * 2 - 1 if _rscore > 0 else 0.0
+            print("[body_diag] cos=%.3f vs id%s -> match=%s(%.2f)" %
+                  (_cos, _rid, slot, score))
         if slot is not None and slot not in filled_slots:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
             img.draw_rectangle(x, y, w, h, color=color, thickness=4)

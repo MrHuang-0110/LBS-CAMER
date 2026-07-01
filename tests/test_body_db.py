@@ -72,6 +72,21 @@ def test_database_search_returns_none_for_unmatched():
     assert score == 0.0
 
 
+def test_default_threshold_rejects_orthogonal():
+    """默认阈值下正交特征(余弦 0 → score 0.5)不得命中。
+
+    根因回归测试:database_search 用 score=cos/2+0.5 映射(同 face_db),
+    默认阈值必须 ≥0.75(cos≥0.5)。若默认 0.5 → cos≥0 全命中 → 所有人都报 ID1。
+    """
+    from core.body_db import BodyDB, database_search
+    db = BodyDB()
+    db.register(F_A)  # slot 1
+    # F_B 与 F_A 正交:cos=0 → score=0.5。默认阈值下必须 (None, 0.0)。
+    slot, score = database_search(F_B, db.get_features())  # 默认阈值
+    assert slot is None, "默认阈值过低:正交特征(cos=0)不应命中,得 slot=%s score=%s" % (slot, score)
+    assert score == 0.0
+
+
 def test_database_search_empty_db():
     from core.body_db import BodyDB, database_search
     db = BodyDB()

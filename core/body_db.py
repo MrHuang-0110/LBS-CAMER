@@ -13,6 +13,11 @@ from core import db_store
 
 BODY_DB_PATH = "/sdcard/CamerAi/data/body_db.json"
 
+# 默认匹配阈值(score=cos/2+0.5 映射后)。0.75 ⇒ cos≥0.5,对齐 face_db。
+# ⚠️ 勿用 0.5:0.5 ⇒ cos≥0,CNN 自然图像特征几乎总正相关 → 所有人都命中同一 ID。
+# 板端按 recognition.kmodel 对人体的实际区分力调(诊断见 app.py _DEBUG_DIAG)。
+BODY_MATCH_THRESHOLD = 0.75
+
 
 def _to_list(feat):
     """特征归一为 plain list。板端 ulab ndarray → .tolist();host list 直通。"""
@@ -27,7 +32,7 @@ def _to_list(feat):
             return feat
 
 
-def database_search(feature, db_features, threshold=0.5):
+def database_search(feature, db_features, threshold=BODY_MATCH_THRESHOLD):
     """Cosine-match feature against db_features. Return (slot_id, score) or (None, 0.0).
 
     纯 Python cosine(host + board 通用)。db_features: {slot_id: list}。
