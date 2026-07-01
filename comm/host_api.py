@@ -33,10 +33,10 @@ class HostAPI:
     TYPE_OBJECT_DETECT  = 0x05
     TYPE_COLOR_DETECT   = 0x06
     TYPE_ROAD_DETECT    = 0x07
-    TYPE_GESTURE_DETECT = 0x08
-    TYPE_BODY_DETECT    = 0x09
-    TYPE_OBJECT_CLASSIFY = 0x0A
-    TYPE_IMAGE_CLASSIFY  = 0x0B
+    TYPE_GESTURE_DETECT = 0x10
+    TYPE_BODY_DETECT    = 0x11
+    TYPE_OBJECT_CLASSIFY = 0x12
+    TYPE_IMAGE_CLASSIFY  = 0x13
 
     # category_id → msg_type 映射（reset 框架 category 与协议类型码对接）
     CATEGORY_TYPE = {
@@ -80,6 +80,10 @@ class HostAPI:
         self._tx_len = 0
         # 预分配 id 数据载荷缓冲(40B),send_id_data 每帧复用,零分配。
         self._id_payload = bytearray(40)
+        # 板端诊断:低频打印实际 category→msg_type 映射,用于排查主机收到类型不对。
+        self._diag_tick_count = 0
+        self._diag_last_category = None
+        self._diag_last_msg_type = None
 
     # ── 公开属性 ──
 
@@ -186,6 +190,13 @@ class HostAPI:
             if _time.ticks_diff(_time.ticks_ms(), self._last_handshake_ms) < self.HANDSHAKE_COOLDOWN_MS:
                 return
         msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
+        self._diag_tick_count += 1
+        if category_id != self._diag_last_category or msg_type != self._diag_last_msg_type \
+                or self._diag_tick_count % 30 == 0:
+            print("[HostAPI] tick category=%s msg_type=0x%02X slots=%s" %
+                  (category_id, msg_type, "none" if slots is None else "data"))
+            self._diag_last_category = category_id
+            self._diag_last_msg_type = msg_type
         self.send_id_data(msg_type, slots)
 
     # ── 握手状态机 ──

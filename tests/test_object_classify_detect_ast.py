@@ -68,9 +68,9 @@ def test_on_frame_uses_registrar():
 
 
 def test_has_host_tick():
-    """app.py on_frame 必须有 host_tick 调用(协议 0x0A)。"""
+    """app.py on_frame 必须有 host_tick 调用(协议 0x12)。"""
     src = _app_src()
-    assert "host_tick" in src, "app must call host_tick for protocol 0x0A"
+    assert "host_tick" in src, "app must call host_tick for protocol 0x12"
 
 
 def test_has_draw_cross():

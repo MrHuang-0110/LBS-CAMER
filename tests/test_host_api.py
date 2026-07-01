@@ -240,6 +240,53 @@ def test_color_detect_i18n_keys_exist():
             assert key in seg, "color_detect.%s missing in %s" % (key, lang)
 
 
+def test_camera_ai_protocol_constants_remapped_to_0x10_range():
+    """手势/人体/物体分类/图像分类必须避开主机旧命令 0x08/0x09/0x0A。"""
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    values = {}
+    for n in cls.body:
+        if isinstance(n, ast.Assign):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    if t.id in ("TYPE_GESTURE_DETECT", "TYPE_BODY_DETECT",
+                                "TYPE_OBJECT_CLASSIFY", "TYPE_IMAGE_CLASSIFY"):
+                        assert isinstance(n.value, ast.Constant), "%s must be a literal" % t.id
+                        values[t.id] = n.value.value
+    assert values.get("TYPE_GESTURE_DETECT") == 0x10
+    assert values.get("TYPE_BODY_DETECT") == 0x11
+    assert values.get("TYPE_OBJECT_CLASSIFY") == 0x12
+    assert values.get("TYPE_IMAGE_CLASSIFY") == 0x13
+
+
+def test_tick_prints_low_frequency_category_msg_type_diagnostic():
+    """HostAPI.tick 应低频打印实际 category/msg_type,用于板端验证类型是否发错。
+
+    诊断要求:
+    - __init__ 里保存上次 category/msg_type 与计数器;
+    - tick() 映射 msg_type 后打印 category 和 0x%02X 类型;
+    - 打印应受类别变化或 30 帧节流控制,避免每帧刷屏。
+    """
+    src = _src()
+    tree = ast.parse(src, filename=HOST_API_PATH)
+    cls = _class_node(tree, "HostAPI")
+    init = _method_node(cls, "__init__")
+    tick = _method_node(cls, "tick")
+    init_seg = ast.get_source_segment(src, init) or ""
+    tick_seg = ast.get_source_segment(src, tick) or ""
+    assert "_diag_tick_count" in init_seg, "__init__ must initialize diagnostic tick counter"
+    assert "_diag_last_category" in init_seg, "__init__ must remember last diagnostic category"
+    assert "_diag_last_msg_type" in init_seg, "__init__ must remember last diagnostic msg_type"
+    assert "[HostAPI] tick" in tick_seg, "tick must print HostAPI diagnostic line"
+    assert "category=%s" in tick_seg and "msg_type=0x%02X" in tick_seg, \
+        "diagnostic must include category and hex msg_type"
+    assert "% 30" in tick_seg or "30 == 0" in tick_seg, \
+        "diagnostic must be throttled to every ~30 ticks"
+    assert "_diag_last_category" in tick_seg and "_diag_last_msg_type" in tick_seg, \
+        "diagnostic must also print when category/type changes"
+
+
 def test_runner():
     failures = 0
     for name in sorted(n for n in globals() if n.startswith("test_") and n != "test_runner"):

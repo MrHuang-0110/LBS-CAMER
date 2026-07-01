@@ -67,7 +67,7 @@ def test_has_host_tick():
     """app.py on_frame 必须有 host_tick 调用。"""
     app_path = os.path.join(ROOT, "scripts", "body_detect", "app.py")
     src = _read(app_path)
-    assert "host_tick" in src, "app must call host_tick for protocol 0x09"
+    assert "host_tick" in src, "app must call host_tick for protocol 0x11"
 
 
 def test_has_draw_cross():
