@@ -110,6 +110,8 @@ class HostAPI:
         self._diag_tick_count = 0
         self._diag_last_category = None
         self._diag_last_msg_type = None
+        # 主机→摄像头切换命令回调:cb(category),category=str 或 None(回菜单)。
+        self._switch_handler = None
 
     # ── 公开属性 ──
 
@@ -284,26 +286,50 @@ class HostAPI:
         buf = self._rx_buf
         nbuf = len(buf)
         i = 0
-        matched_at = -1
-        while i <= nbuf - flen:
-            if buf[i] == self.FRAME_HEAD and buf[i:i + flen] == frame:
-                matched_at = i
+        # 扫描:在每个 0x5A 位置先试握手常量(18B),再试切换命令帧(8B)。
+        # 命令帧短(8B)且 index=FF,与握手帧(index=09)不冲突。
+        while i < nbuf:
+            if buf[i] != self.FRAME_HEAD:
+                i += 1
+                continue
+            # 1) 握手常量匹配(需完整 18B)
+            if i + flen <= nbuf and buf[i:i + flen] == frame:
+                self._send_handshake_reply()
+                buf = bytearray(buf[i + flen:])
+                i = 0
+                nbuf = len(buf)
+                continue
+            # 2) 切换命令帧匹配(8B)
+            parsed = self._parse_switch_frame(buf, i)
+            if parsed is not None:
+                mode, _nxt = parsed
+                category = self.MODE_TO_CATEGORY.get(mode)
+                if mode in self.MODE_TO_CATEGORY:
+                    print("[HostAPI] switch frame mode=0x%02X category=%s" %
+                          (mode, category))
+                    if self._switch_handler is not None:
+                        try:
+                            self._switch_handler(category)
+                        except Exception as e:
+                            print("[HostAPI] switch handler error: %s" % e)
+                else:
+                    print("[HostAPI] switch frame unknown mode=0x%02X" % mode)
+                buf = bytearray(buf[i + 8:])
+                i = 0
+                nbuf = len(buf)
+                continue
+            # 当前 0x5A 处两种帧都不完整匹配:可能是半帧起点,保留尾部退出
+            if i + 8 > nbuf:
                 break
             i += 1
 
-        if matched_at < 0:
-            # 未匹配:保留从最后一个 0x5A 开始的尾部(可能是半帧,等下次拼)
-            # MicroPython bytearray.rfind 不接受 int,须传 bytes
-            last_head = buf.rfind(bytes([self.FRAME_HEAD]))
-            if last_head > 0:
-                self._rx_buf = bytearray(buf[last_head:])
-            else:
-                self._rx_buf = bytearray()
-            return
-
-        # 匹配:应答 + 记时间戳 + 消费掉匹配帧及之前的字节
-        self._send_handshake_reply()
-        self._rx_buf = bytearray(buf[matched_at + flen:])
+        # 保留从最后一个 0x5A 开始的尾部(半帧,等下次拼)
+        # MicroPython bytearray.rfind 不接受 int,须传 bytes
+        last_head = buf.rfind(bytes([self.FRAME_HEAD]))
+        if last_head >= 0:
+            self._rx_buf = bytearray(buf[last_head:])
+        else:
+            self._rx_buf = bytearray()
 
     def _send_handshake_reply(self):
         """发送握手应答帧 + 记录应答时间戳(100ms 静默期起点)"""
@@ -313,6 +339,15 @@ class HostAPI:
         print("[HostAPI] handshake reply sent — connected")
 
     # ── 命令注册（预留）──
+
+    def register_switch_handler(self, callback):
+        """注册主机→摄像头切换命令回调。
+
+        Args:
+            callback: func(category) — category 为 str(脚本 category_id)
+                      或 None(回主菜单)。由 main.py 执行写 .next_script + reset。
+        """
+        self._switch_handler = callback
 
     def register_handler(self, cmd, callback):
         """注册命令回调（预留）
