@@ -57,7 +57,7 @@ _clear_btn = None
 #   cos < 0.5 → 模型有区分力,调 BODY_MATCH_THRESHOLD 即可分辨不同人;
 #   cos ≥ 0.7 → 模型对人体无区分力,"学习ID分辨个体"在此 kmodel 下不可行。
 # 验证完置 False 关闭。
-_DEBUG_DIAG = True
+_DEBUG_DIAG = False
 _diag_fc = 0
 _save_btn = None
 _close_overlay = False
