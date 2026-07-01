@@ -51,6 +51,7 @@ class HostAPI:
         "gesture_detect": TYPE_GESTURE_DETECT,  # 0x08
         "body_detect":     TYPE_BODY_DETECT,       # 0x09
         "object_classify": TYPE_OBJECT_CLASSIFY,   # 0x0A
+        "image_classify":  TYPE_IMAGE_CLASSIFY,    # 0x13
         "_template":  TYPE_MAIN_MENU,     # 0x01（默认）
     }
 
