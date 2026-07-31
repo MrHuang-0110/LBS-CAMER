@@ -66,17 +66,26 @@ def _init_ai():
 
     ⚠️ 双 kmodel 顺序根因(坑#19):rec kmodel 必须在 det.config_preprocess()
     之前加载。ObjectClassifyRecognition.__init__ 已按此顺序加载。
+    kmodel 加载整体包 try/except：失败则 _ai_ready=False，on_frame 跳过推理。
     """
-    global _ocr, _db_features
-    print("[object_classify] loading yolov8n detection + recognition models...")
-    _ocr = ObjectClassifyRecognition(
-        OBJ_DET_KMPATH, OBJ_RECO_KMPATH,
-        det_input_size=[320, 320], rec_input_size=[224, 224],
-        confidence_threshold=0.5, nms_threshold=0.2,
-        rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
-        debug_mode=0)
-    _db_features = object_classify_db.init_features()
-    print("[object_classify] AI ready, loaded %d object(s)" % len(_db_features))
+    global _ocr, _db_features, _ai_ready
+    _ai_ready = False
+    try:
+        print("[object_classify] loading yolov8n detection + recognition models...")
+        _ocr = ObjectClassifyRecognition(
+            OBJ_DET_KMPATH, OBJ_RECO_KMPATH,
+            det_input_size=[320, 320], rec_input_size=[224, 224],
+            confidence_threshold=0.5, nms_threshold=0.2,
+            rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
+            debug_mode=0)
+        _db_features = object_classify_db.init_features()
+        _ai_ready = True
+        print("[object_classify] AI ready, loaded %d object(s)" % len(_db_features))
+    except Exception as e:
+        print("[object_classify] _init_ai FAILED: %s" % e)
+        sys.print_exception(e)
+        _ocr = None
+        _ai_ready = False
 
 
 def _init_registry(fpioa):
@@ -486,6 +495,8 @@ def run(runtime):
             fc += 1
             if fc % 30 == 0:
                 print("[object_classify] fc=%d" % fc)
+                if fc % 300 == 0:
+                    import gc as _gc; print("[object_classify] mem_free=%d" % _gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

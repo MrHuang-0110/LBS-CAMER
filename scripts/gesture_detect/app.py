@@ -59,20 +59,29 @@ def _init_ai():
 
     ⚠️ 双 kmodel 顺序根因:hand_rec kmodel 必须在 hand_det.config_preprocess()
     之前加载,否则破坏共享 NPU/AI2D 状态(坑#19,同 face_detect)。
+    kmodel 加载整体包 try/except：失败则 _ai_ready=False，on_frame 跳过推理。
     """
-    global _hand_rec, _db_slots
-    det_kmodel = "/sdcard/examples/kmodel/hand_det.kmodel"
-    rec_kmodel = "/sdcard/examples/kmodel/hand_reco.kmodel"
-    print("[gesture_detect] loading hand detection + recognition models...")
-    _hand_rec = HandRecognition(
-        det_kmodel, rec_kmodel,
-        det_input_size=[512, 512], rec_input_size=[224, 224],
-        labels=HAND_LABELS, anchors=HAND_ANCHORS,
-        confidence_threshold=0.2, nms_threshold=0.5,
-        rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
-        debug_mode=0)
-    _db_slots = gesture_db.init_features()
-    print("[gesture_detect] AI ready, loaded %d gesture(s)" % len(_db_slots))
+    global _hand_rec, _db_slots, _ai_ready
+    _ai_ready = False
+    try:
+        det_kmodel = "/sdcard/examples/kmodel/hand_det.kmodel"
+        rec_kmodel = "/sdcard/examples/kmodel/hand_reco.kmodel"
+        print("[gesture_detect] loading hand detection + recognition models...")
+        _hand_rec = HandRecognition(
+            det_kmodel, rec_kmodel,
+            det_input_size=[512, 512], rec_input_size=[224, 224],
+            labels=HAND_LABELS, anchors=HAND_ANCHORS,
+            confidence_threshold=0.2, nms_threshold=0.5,
+            rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
+            debug_mode=0)
+        _db_slots = gesture_db.init_features()
+        _ai_ready = True
+        print("[gesture_detect] AI ready, loaded %d gesture(s)" % len(_db_slots))
+    except Exception as e:
+        print("[gesture_detect] _init_ai FAILED: %s" % e)
+        sys.print_exception(e)
+        _hand_rec = None
+        _ai_ready = False
 
 
 def _init_registry(fpioa):
@@ -434,6 +443,8 @@ def run(runtime):
             fc += 1
             if fc % 30 == 0:
                 print("[gesture_detect] fc=%d" % fc)
+                if fc % 300 == 0:
+                    import gc as _gc; print("[gesture_detect] mem_free=%d" % _gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

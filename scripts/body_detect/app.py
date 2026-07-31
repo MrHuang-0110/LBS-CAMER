@@ -69,18 +69,27 @@ def _init_ai():
     ⚠️ 双 kmodel 顺序根因:rec kmodel 必须在 det.config_preprocess()
     之前加载,否则破坏共享 NPU/AI2D 状态(坑#19,同 face_detect/gesture_detect)。
     PersonRecognition.__init__ 已按此顺序加载。
+    kmodel 加载整体包 try/except：失败则 _ai_ready=False，on_frame 跳过推理。
     """
-    global _person_rec, _db_features
-    print("[body_detect] loading person detection + recognition models...")
-    _person_rec = PersonRecognition(
-        PERSON_DET_KMPATH, PERSON_RECO_KMPATH,
-        det_input_size=[640, 640], rec_input_size=[224, 224],
-        anchors=PERSON_ANCHORS,
-        confidence_threshold=0.2, nms_threshold=0.6,
-        rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
-        debug_mode=0)
-    _db_features = body_db.init_features()
-    print("[body_detect] AI ready, loaded %d body(s)" % len(_db_features))
+    global _person_rec, _db_features, _ai_ready
+    _ai_ready = False
+    try:
+        print("[body_detect] loading person detection + recognition models...")
+        _person_rec = PersonRecognition(
+            PERSON_DET_KMPATH, PERSON_RECO_KMPATH,
+            det_input_size=[640, 640], rec_input_size=[224, 224],
+            anchors=PERSON_ANCHORS,
+            confidence_threshold=0.2, nms_threshold=0.6,
+            rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
+            debug_mode=0)
+        _db_features = body_db.init_features()
+        _ai_ready = True
+        print("[body_detect] AI ready, loaded %d body(s)" % len(_db_features))
+    except Exception as e:
+        print("[body_detect] _init_ai FAILED: %s" % e)
+        sys.print_exception(e)
+        _person_rec = None
+        _ai_ready = False
 
 
 def _init_registry(fpioa):
@@ -446,6 +455,8 @@ def run(runtime):
             fc += 1
             if fc % 30 == 0:
                 print("[body_detect] fc=%d" % fc)
+                if fc % 300 == 0:
+                    import gc as _gc; print("[body_detect] mem_free=%d" % _gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

@@ -54,7 +54,13 @@ class _FaceDB:
 
     def _load_next_slot(self):
         """读 _next_slot 指针文件（init_features 内，与读 .bin 同安全窗口）。
-        文件不存在/损坏 → 默认 1。"""
+        文件不存在/损坏 → 默认 1。
+        坑#18:open('r') ENOENT 异常污染 FATFS,须 os.stat 预检查。"""
+        try:
+            os.stat(_NEXT_SLOT_PATH)
+        except Exception:
+            self._next_slot = 1
+            return
         try:
             with open(_NEXT_SLOT_PATH, 'r') as f:
                 v = int(f.read().strip())

@@ -38,39 +38,52 @@ _save_btn = None
 _close_overlay = False
 
 
+
+
+
 def _init_ai():
     """Load BOTH kmodels + db_features before the loop.
 
     ⚠️ 双 kmodel 顺序根因：face_reg kmodel 必须在 face_det.config_preprocess()
     之前加载，否则破坏共享 NPU/AI2D 状态。坑#19。
+    kmodel 加载整体包 try/except：任一 kmodel 失败则 _ai_ready=False，
+    on_frame 跳过推理，不崩溃。
     """
-    global _face_det, _face_reg, _db_features
-    anchors_path = "/sdcard/examples/utils/prior_data_320.bin"
-    det_kmodel = "/sdcard/examples/kmodel/face_detection_320.kmodel"
-    reg_kmodel = "/sdcard/examples/kmodel/face_recognition_mobile.kmodel"
-    print("[face_detect] loading anchors...")
-    anchors = np.fromfile(anchors_path, dtype=np.float)
-    anchors = anchors.reshape((4200, 4))
-    print("[face_detect] loading det kmodel...")
-    _face_det = FaceDetectionApp(det_kmodel, model_input_size=[320, 320], anchors=anchors,
-                                 confidence_threshold=0.5, nms_threshold=0.2,
-                                 rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
-                                 debug_mode=0)
-    print("[face_detect] loading reg kmodel...")
+    global _face_det, _face_reg, _db_features, _ai_ready
+    _ai_ready = False
     try:
-        _face_reg = FaceRegistrationApp(reg_kmodel, model_input_size=[112, 112],
-                                        rgb888p_size=RGB888P_SIZE, debug_mode=0)
-        print("[face_detect] reg kmodel ready (512-dim)")
+        anchors_path = "/sdcard/examples/utils/prior_data_320.bin"
+        det_kmodel = "/sdcard/examples/kmodel/face_detection_320.kmodel"
+        reg_kmodel = "/sdcard/examples/kmodel/face_recognition_mobile.kmodel"
+        print("[face_detect] loading anchors...")
+        anchors = np.fromfile(anchors_path, dtype=np.float)
+        anchors = anchors.reshape((4200, 4))
+        print("[face_detect] loading det kmodel...")
+        _face_det = FaceDetectionApp(det_kmodel, model_input_size=[320, 320], anchors=anchors,
+                                     confidence_threshold=0.5, nms_threshold=0.2,
+                                     rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
+                                     debug_mode=0)
+        print("[face_detect] loading reg kmodel...")
+        try:
+            _face_reg = FaceRegistrationApp(reg_kmodel, model_input_size=[112, 112],
+                                            rgb888p_size=RGB888P_SIZE, debug_mode=0)
+            print("[face_detect] reg kmodel ready (512-dim)")
+        except Exception as e:
+            print("[face_detect] reg kmodel FAILED: %s" % e)
+            sys.print_exception(e)
+            _face_reg = None
+        # 两个 kmodel 都加载完，才 build face_det 的 AI2D（顺序根因）
+        _face_det.config_preprocess()
+        _db_features = face_db.init_features()
+        print("[face_detect] db loaded: %d face(s)" % len(_db_features))
+        _ai_ready = True
+        print("[face_detect] AI ready")
     except Exception as e:
-        print("[face_detect] reg kmodel FAILED: %s" % e)
+        print("[face_detect] _init_ai FAILED: %s" % e)
         sys.print_exception(e)
+        _face_det = None
         _face_reg = None
-    # 两个 kmodel 都加载完，才 build face_det 的 AI2D（顺序根因）
-    _face_det.config_preprocess()
-    _db_features = face_db.init_features()
-    print("[face_detect] db loaded: %d face(s)" % len(_db_features))
-    print("[face_detect] AI ready")
-
+        _ai_ready = False
 
 def _init_registry(fpioa):
     global _id_registry
@@ -434,6 +447,8 @@ def run(runtime):
             fc += 1
             if fc % 30 == 0:
                 print("[face_detect] fc=%d" % fc)
+                if fc % 300 == 0:
+                    import gc as _gc; print("[face_detect] mem_free=%d" % _gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

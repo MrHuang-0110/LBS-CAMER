@@ -64,15 +64,23 @@ _close_overlay = False
 
 
 def _init_ai():
-    global _object_det
-    print("[object_detect] loading det kmodel...")
-    _object_det = ObjectDetectionApp(
-        KMODEL_PATH, labels=COCO_LABELS, model_input_size=[320, 320],
-        max_boxes_num=20, confidence_threshold=0.5, nms_threshold=0.2,
-        rgb888p_size=[RGB888P_W, RGB888P_H], display_size=[DISPLAY_W, DISPLAY_H],
-        debug_mode=0)
-    _object_det.config_preprocess()
-    print("[object_detect] AI ready")
+    global _object_det, _ai_ready
+    _ai_ready = False
+    try:
+        print("[object_detect] loading det kmodel...")
+        _object_det = ObjectDetectionApp(
+            KMODEL_PATH, labels=COCO_LABELS, model_input_size=[320, 320],
+            max_boxes_num=20, confidence_threshold=0.5, nms_threshold=0.2,
+            rgb888p_size=[RGB888P_W, RGB888P_H], display_size=[DISPLAY_W, DISPLAY_H],
+            debug_mode=0)
+        _object_det.config_preprocess()
+        _ai_ready = True
+        print("[object_detect] AI ready")
+    except Exception as e:
+        print("[object_detect] _init_ai FAILED: %s" % e)
+        sys.print_exception(e)
+        _object_det = None
+        _ai_ready = False
 
 
 def _init_registry(fpioa):
@@ -438,6 +446,8 @@ def run(runtime):
             fc += 1
             if fc % 30 == 0:
                 print("[object_detect] fc=%d" % fc)
+                if fc % 300 == 0:
+                    import gc as _gc; print("[object_detect] mem_free=%d" % _gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

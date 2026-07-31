@@ -3,6 +3,7 @@
 # 分层键：t("category.camera")、t("common.back") 等。
 
 import json
+import os
 
 
 class LangManager:
@@ -22,16 +23,23 @@ class LangManager:
 
         path = self.I18N_PATH + self._lang + ".json"
         try:
+            os.stat(path)
+        except Exception:
+            print(f"[Lang] {path} not found; using fallback")
+            self._data[self._lang] = {
+                "common": {"back": "Back", "app_name": "CamerAi"},
+            }
+            self._flatten()
+            return
+        try:
             with open(path, 'r') as f:
                 self._data[self._lang] = json.load(f)
         except Exception as e:
             print(f"[Lang] load {path} failed: {e}")
-            # 回退到硬编码英文最小集
             self._data[self._lang] = {
                 "common": {"back": "Back", "app_name": "CamerAi"},
             }
 
-        # 展平嵌套 JSON 为 "section.key" 形式
         self._flatten()
 
     def _flatten(self):

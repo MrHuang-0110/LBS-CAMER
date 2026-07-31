@@ -20,30 +20,45 @@ class ConfigManager:
         """加载全部配置"""
         # app.json
         try:
-            with open(self._app_path, 'r') as f:
-                self.app = json.load(f)
-        except Exception as e:
-            print(f"[Config] load app.json failed: {e}; using defaults")
+            os.stat(self._app_path)
+        except Exception:
             self.app = {
                 "boot_logo": "/sdcard/CamerAi/resource/logo.png",
                 "boot_logo_ms": 1500,
                 "lang": "zh_CN",
                 "buzzer_enabled": True,
             }
+        else:
+            try:
+                with open(self._app_path, 'r') as f:
+                    self.app = json.load(f)
+            except Exception as e:
+                print(f"[Config] load app.json failed: {e}; using defaults")
+                self.app = {
+                    "boot_logo": "/sdcard/CamerAi/resource/logo.png",
+                    "boot_logo_ms": 1500,
+                    "lang": "zh_CN",
+                    "buzzer_enabled": True,
+                }
 
         # categories.json
         try:
-            with open(self._cat_path, 'r') as f:
-                data = json.load(f)
-            self.categories = data.get('categories', [])
-            # 仅保留 enabled 的类目，按 order 排序
-            self.categories = sorted(
-                [c for c in self.categories if c.get('enabled', True)],
-                key=lambda c: c.get('order', 999),
-            )
-        except Exception as e:
-            print(f"[Config] load categories.json failed: {e}; using empty")
+            os.stat(self._cat_path)
+        except Exception:
             self.categories = []
+        else:
+            try:
+                with open(self._cat_path, 'r') as f:
+                    data = json.load(f)
+                self.categories = data.get('categories', [])
+                # 仅保留 enabled 的类目，按 order 排序
+                self.categories = sorted(
+                    [c for c in self.categories if c.get('enabled', True)],
+                    key=lambda c: c.get('order', 999),
+                )
+            except Exception as e:
+                print(f"[Config] load categories.json failed: {e}; using empty")
+                self.categories = []
 
     # ── app.json 读写 ─────────────────────────────────
 

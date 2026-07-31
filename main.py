@@ -162,11 +162,17 @@ def run_menu():
     menu.show()
     print("[CamerAi] main menu running")
     while True:
-        os.exitpoint()
-        _th = lv.task_handler()
-        menu.diag_after_task_handler()
-        runtime.host_tick()
-        time.sleep_ms(_th if _th > 0 else 5)
+        try:
+            os.exitpoint()
+            _th = lv.task_handler()
+            menu.diag_after_task_handler()
+            runtime.host_tick()
+            time.sleep_ms(_th if _th > 0 else 5)
+        except Exception as e:
+            print("[CamerAi] run_menu loop error: %s" % e)
+            import sys as _sys
+            _sys.print_exception(e)
+            raise  # 外层 main() 的 BaseException 兜底
 
 
 

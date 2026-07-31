@@ -233,8 +233,8 @@ def _build_top_bar(runtime, exit_flag):
 
 
 def _build_preview_area():
-    """预览区:全透明 LVGL 对象,让底层 OSD1 相机画面透出。"""
-    global _preview_bg
+    """预览区:全透明 LVGL 对象,让底层 OSD1 相机画面透出。预建白闪层(复用,免每次拍照创建/删除)。"""
+    global _preview_bg, _flash_obj
     preview = lv.obj(_screen)
     preview.set_size(lv.pct(100), PREVIEW_H)
     preview.set_pos(0, PREVIEW_Y)
@@ -245,6 +245,19 @@ def _build_preview_area():
     preview.clear_flag(lv.obj.FLAG.SCROLLABLE)
     preview.clear_flag(lv.obj.FLAG.CLICKABLE)
     _preview_bg = preview
+
+    # 预建白闪层(初始隐藏),拍照时 show → 120ms 后 hide,避免每拍创建/删除 lv.obj
+    flash = lv.obj(preview)
+    flash.set_size(lv.pct(100), lv.pct(100))
+    flash.set_pos(0, 0)
+    flash.set_style_bg_color(lv.color_hex(0xFFFFFF), 0)
+    flash.set_style_bg_opa(160, 0)
+    flash.set_style_border_width(0, 0)
+    flash.set_style_radius(0, 0)
+    flash.clear_flag(lv.obj.FLAG.SCROLLABLE)
+    flash.clear_flag(lv.obj.FLAG.CLICKABLE)
+    flash.add_flag(lv.obj.FLAG.HIDDEN)  # 初始隐藏
+    _flash_obj = flash
 
 
 def _build_bottom_bar(runtime):
@@ -459,34 +472,23 @@ def _capture_photo():
 
 
 def _flash_feedback():
-    """拍照白闪反馈 — 创建半透明白层,由主循环 _update_flash 在 ~120ms 后删除。"""
+    """拍照白闪反馈 — 显隐预建的白闪层(预建一次,避免每拍创建/删除 lv.obj 的坑#10 风险)。"""
     global _flash_obj, _flash_start
-    if _preview_bg is None:
+    if _flash_obj is None:
         return
-    flash = lv.obj(_preview_bg)
-    flash.set_size(lv.pct(100), lv.pct(100))
-    flash.set_pos(0, 0)
-    flash.set_style_bg_color(lv.color_hex(WHITE), 0)
-    flash.set_style_bg_opa(160, 0)
-    flash.set_style_border_width(0, 0)
-    flash.set_style_radius(0, 0)
-    flash.clear_flag(lv.obj.FLAG.SCROLLABLE)
-    flash.clear_flag(lv.obj.FLAG.CLICKABLE)
-    _flash_obj = flash
+    _flash_obj.clear_flag(lv.obj.FLAG.HIDDEN)
     _flash_start = time.ticks_ms()
 
 
 def _update_flash():
-    """主循环每帧调:白闪 120ms 后删除。"""
+    """主循环每帧调:白闪 120ms 后隐藏(复用预建对象,免创建/删除)。"""
     global _flash_obj
     if _flash_obj is None:
         return
+    if _flash_obj.has_flag(lv.obj.FLAG.HIDDEN):
+        return
     if time.ticks_diff(time.ticks_ms(), _flash_start) >= 120:
-        try:
-            _flash_obj.delete()
-        except Exception:
-            pass
-        _flash_obj = None
+        _flash_obj.add_flag(lv.obj.FLAG.HIDDEN)
 
 
 # ── 录像(空壳:状态 + 计时器,无实际编码)──
@@ -928,13 +930,7 @@ def _destroy_ui():
     _shutter_btn = None
     _mode_green_dot = None
     _title_label = None
-
-    if _flash_obj is not None:
-        try:
-            _flash_obj.delete()
-        except Exception:
-            pass
-        _flash_obj = None
+    _flash_obj = None  # flash 是 _preview_bg 的子对象,父对象删除时自动清理
 
     # 恢复屏幕背景不透明(相机页设过透明,主菜单需不透明背景)
     try:
