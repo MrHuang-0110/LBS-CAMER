@@ -16,7 +16,7 @@ import nncase_runtime as nn
 import ulab.numpy as np
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
-from libs.Utils import ScopedTiming
+from libs.PipeLine import ScopedTiming
 
 RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]

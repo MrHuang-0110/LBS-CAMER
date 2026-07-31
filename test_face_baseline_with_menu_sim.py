@@ -31,7 +31,8 @@ from machine import TOUCH
 from machine import FPIOA
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
-from libs.Utils import ScopedTiming, letterbox_pad_param
+from libs.PipeLine import ScopedTiming
+from libs.Utils import letterbox_pad_param
 
 
 def ALIGN_UP(x, align=16):

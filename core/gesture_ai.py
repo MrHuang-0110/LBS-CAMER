@@ -13,7 +13,7 @@ import ulab.numpy as np
 import aicube
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
-from libs.Utils import ScopedTiming
+from libs.PipeLine import ScopedTiming
 
 # AI 通道分辨率(对齐 face_detect 的 chn2 XGA RGBP888)
 RGB888P_SIZE = [1024, 768]

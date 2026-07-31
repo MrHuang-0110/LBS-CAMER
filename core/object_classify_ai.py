@@ -17,7 +17,7 @@ import nncase_runtime as nn
 import ulab.numpy as np
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
-from libs.Utils import ScopedTiming
+from libs.PipeLine import ScopedTiming
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 
 # AI 通道分辨率(对齐 body_detect/object_detect 的 chn2 XGA RGBP888)

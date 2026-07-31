@@ -11,7 +11,8 @@ import ulab.numpy as np
 import aidemo
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
-from libs.Utils import ScopedTiming, letterbox_pad_param
+from libs.PipeLine import ScopedTiming
+from libs.Utils import letterbox_pad_param
 
 RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
