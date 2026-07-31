@@ -265,8 +265,9 @@ class HostAPI:
             n = self._uart.any()
         except AttributeError:
             # 固件无 any():read() 非阻塞轮询(实测返回 None 当无数据)
+            # 用 read(16) 而非 256:握手帧 18B 分两次读完,减少每帧浪费
             try:
-                return self._uart.read(256)
+                return self._uart.read(16)
             except Exception:
                 return None
         except Exception:

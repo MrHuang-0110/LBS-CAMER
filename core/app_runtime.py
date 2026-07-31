@@ -125,7 +125,7 @@ class AppRuntime:
                 else:
                     self.draw_buf_1.bytearray()[:] = bytearray(0)
                     self.display.show_image(self.draw_buf_2, layer=Display.LAYER_OSD2)
-            time.sleep(0.01)
+            time.sleep(0.002)  # 对齐官方 ai_lvgl.py,2ms 让步 DMA 而非 10ms(减少帧延迟)
         disp.flush_ready()
 
     def _init_touch(self):

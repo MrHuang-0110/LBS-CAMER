@@ -296,13 +296,18 @@ class MainMenu:
         center_y = self._scroll.get_scroll_y() + self._scroll.get_height() // 2
         nearest_idx = self._find_nearest(center_y)
         step = CARD_H + CARD_GAP
-        for card in self._cards:
-            card_cy = card.y + CARD_H // 2
-            dist = abs(card_cy - center_y)
-            t = dist / float(step)
-            if t > 1.0:
-                t = 1.0
-            card.apply_scroll_visual(t)
+        # 优化:只处理最近 3 张卡片(选中 + 前后各 1),其余保持非选中态,
+        # 减少每帧遍历全部卡片的 LVGL style 设定开销(K230 单核性能有限)。
+        for i, card in enumerate(self._cards):
+            if abs(i - nearest_idx) <= 1:
+                card_cy = card.y + CARD_H // 2
+                dist = abs(card_cy - center_y)
+                t = dist / float(step)
+                if t > 1.0:
+                    t = 1.0
+                card.apply_scroll_visual(t)
+            else:
+                card.apply_scroll_visual(1.0)
         if update_selection:
             self._selected_index = nearest_idx
 

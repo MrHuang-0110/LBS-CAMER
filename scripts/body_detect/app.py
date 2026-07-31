@@ -179,7 +179,6 @@ def on_frame(img):
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
-    gc.collect()
 
 
 def _refresh_count():
@@ -451,6 +450,7 @@ def run(runtime):
                 _id_registry.poll_k2()
             _process_overlay_close()
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+            gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
             time.sleep_ms(lv.task_handler())
             fc += 1
             if fc % 30 == 0:

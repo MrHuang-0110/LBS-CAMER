@@ -166,7 +166,6 @@ def on_frame(img):
     _face_det.draw_result(img, det_boxes, recognition_results)
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
-    gc.collect()
 
 
 def _refresh_count():
@@ -443,6 +442,7 @@ def run(runtime):
                 _id_registry.poll_k2()
             _process_overlay_close()
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+            gc.collect()  # 放在 show_image 之后、task_handler 之前，避免 AI 推理后立即 GC 阻塞 DMA
             time.sleep_ms(lv.task_handler())
             fc += 1
             if fc % 30 == 0:
