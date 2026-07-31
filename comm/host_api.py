@@ -112,6 +112,10 @@ class HostAPI:
         self._diag_last_msg_type = None
         # 主机→摄像头切换命令回调:cb(category),category=str 或 None(回菜单)。
         self._switch_handler = None
+        # ── 临时调试(定位"无法与主机通信"问题):打印主机发来的原始 RX 字节 ──
+        # 定位完成后删除开关与 poll_handshake 中的打印段。
+        self._debug_rx_print = True
+        self._debug_last_rx_print_ms = 0
 
     # ── 公开属性 ──
 
@@ -251,6 +255,33 @@ class HostAPI:
 
     # ── 握手状态机 ──
 
+    def _read_uart(self):
+        """跨固件读取 UART 可用数据(兼容有无 any() 的固件)。
+
+        坑:CanMV K230D v1.2.2 的 machine.UART 无 any()。poll_handshake 原
+        依赖 any(),在该固件上每次抛 AttributeError 被 except 吞掉 → 永不读
+        数据 → 不应答握手 → 主机收不到任何帧(整机"无法通讯",tick 打印正常
+        但协议栈静默死亡)。实测该固件 read() 非阻塞(无数据返回 None),故:
+          - 有 any() :读可用字节数(好机器固件路径)
+          - 无 any() :直接 read() 轮询,返回 None 即无数据
+        """
+        try:
+            n = self._uart.any()
+        except AttributeError:
+            # 固件无 any():read() 非阻塞轮询(实测返回 None 当无数据)
+            try:
+                return self._uart.read(256)
+            except Exception:
+                return None
+        except Exception:
+            return None
+        if n:
+            try:
+                return self._uart.read(n)
+            except Exception:
+                return None
+        return None
+
     def poll_handshake(self):
         """非阻塞握手检测：按完整握手请求帧匹配→自动应答。
 
@@ -259,22 +290,30 @@ class HostAPI:
         主机超时(没收到数据帧)后会重发握手请求 → 重新应答 + 重置 100ms 计时,
         故入口不短路(_connected 仅作状态标记)。
         """
-        try:
-            n = self._uart.any()
-        except Exception:
-            self._connected = False
-            return
-
-        if n == 0:
-            return
-
-        try:
-            raw = self._uart.read(n)
-        except Exception:
-            return
-
+        # 跨固件兼容读取:有 any() 走 any(),无 any() 走 read() 轮询(坑见 _read_uart)
+        raw = self._read_uart()
         if raw is None:
             return
+
+        # 调试插桩:打印主机发来的原始字节(hex)——确认 UART1 RX 是否真的收到数据、
+        # 收到的握手帧是否与 HANDSHAKE_REQUEST_FRAME 一致。
+        # 正确握手请求帧应为 18B:5A 97 98 0B 09 "Please Link" A5 A5
+        # (hex: 5a97980b09506c65617365204c696e6ba5a5)。
+        # ⚠️ 坑:不能直接用 raw.hex()——部分板端 MicroPython 版本缺该接口,
+        #    会让 poll_handshake 抛异常→tick 打印消失/主循环崩(已踩)。
+        #    故逐字节 %02x 拼 hex,且整个诊断段 try/except 隔离:
+        #    诊断打印失败绝不能影响业务。
+        # 节流 500ms:握手成功后主机不再发数据,不会持续刷屏。
+        # 用 getattr 防御:host 测试用 HostAPI.__new__ 跳过 __init__,无此属性时静默。
+        if getattr(self, "_debug_rx_print", False):
+            try:
+                now_ms = _time.ticks_ms()
+                if _time.ticks_diff(now_ms, getattr(self, "_debug_last_rx_print_ms", 0)) >= 500:
+                    self._debug_last_rx_print_ms = now_ms
+                    _hex = ''.join('%02x' % raw[i] for i in range(len(raw)))
+                    print("[HostAPI] RX %dB: %s" % (len(raw), _hex))
+            except Exception:
+                pass  # 诊断失败静默,不影响握手/推送
 
         self._rx_buf.extend(raw)
         # 缓冲区超长只保留尾部(丢老数据,保留最近的帧边界)
