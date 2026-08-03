@@ -35,3 +35,16 @@ reousrce/
 .superpowers/
 .reasonix/
 .idea/
+
+# ===== 项目工具/文档/测试（不入库，仓库只放板端运行代码） =====
+demo/
+tools/
+docs/
+tests/
+CLAUDE.md
+项目记录.md
+test_face_baseline.py
+test_face_baseline_camerai_sensor.py
+test_face_baseline_with_menu_sim.py
+main_menu_durui_probe.py
+skills-lock.json
