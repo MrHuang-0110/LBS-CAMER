@@ -25,6 +25,14 @@ from core import db_store
 
 FACE_DB_PATH = "/sdcard/CamerAi/data/face_db.json"
 
+# 匹配阈值(score=cos/2+0.5 映射后)。0.82 ⇒ cos≥0.64。
+# 旧值 0.75(cos≥0.5)对 MobileFaceNet 过松 → 不同人脸也命中,
+# 典型现象"换个人仍识别为上一个人"。提高后未注册人不再误匹配。
+FACE_MATCH_THRESHOLD = 0.82
+# 多人注册时 best 与 second 的最小分数差。差更小 → 特征不可区分,
+# 判"不确定"返回 None(防已注册多人之间 ID 混淆)。单注册人不受影响。
+FACE_MATCH_MARGIN = 0.06
+
 
 class _FaceDB:
     """全局人脸特征缓存"""
@@ -160,12 +168,14 @@ class _FaceDB:
         print("[FaceDB] cleared (memory, clear_dirty)")
 
 
-def database_search(feature, db_features, threshold=0.75):
+def database_search(feature, db_features, threshold=FACE_MATCH_THRESHOLD):
     """Cosine-match feature against db_features. Return (slot_id, score) or (None, 0.0).
 
     db_features: {slot_id: np_array} (in-memory, read-only during on_frame).
     Empty / bad / below-threshold → (None, 0.0). score = 余弦匹配度(0-1),
-    用作上位机置信度。Aligns with official main2.py。
+    用作上位机置信度。Aligns with official main2.py (threshold 提高 + 次佳区分)。
+    多人注册时 best-second < FACE_MATCH_MARGIN → 判不确定(拒绝),
+    防特征相近的已注册人互相混淆。
     """
     if not db_features:
         return None, 0.0
@@ -179,6 +189,7 @@ def database_search(feature, db_features, threshold=0.75):
         return None, 0.0
     best_id = None
     best_score = 0.0
+    second_score = 0.0
     for slot_id, db_feat in db_features.items():
         try:
             norm = np.linalg.norm(db_feat)
@@ -189,9 +200,15 @@ def database_search(feature, db_features, threshold=0.75):
         except Exception:
             continue
         if score > best_score:
+            second_score = best_score
             best_score = score
             best_id = slot_id
+        elif score > second_score:
+            second_score = score
     if best_score < threshold:
+        return None, 0.0
+    # 次佳区分:注册了多人且 best/second 差距过小 → 特征不可区分,拒绝
+    if len(db_features) >= 2 and (best_score - second_score) < FACE_MATCH_MARGIN:
         return None, 0.0
     return best_id, best_score
 

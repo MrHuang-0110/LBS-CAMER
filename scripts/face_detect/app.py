@@ -21,6 +21,11 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
+# 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
+REG_MAX_FACES = 4
+REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
+REG_INTERVAL_3 = 3   # ≥4 人:每 3 帧识别一轮
+MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 
 _RUNTIME = None
 _screen = None
@@ -36,6 +41,8 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
+_reg_counter = 0     # 多人跳帧计数(每 interval 帧识别一轮)
+_last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
 
 
 
@@ -122,9 +129,21 @@ def on_frame(img):
 
     recognition_results = []
     slots = [None, None, None, None]
-    if det_boxes and landms and _face_reg is not None:
-        # 识全部脸：每个检测框跑 reg + 匹配，填对应 DB 槽位
-        for i in range(len(det_boxes)):
+    global _reg_counter, _last_slots
+    n_faces = len(det_boxes) if det_boxes else 0
+    k2_pending = _id_registry is not None and _id_registry.has_pending()
+    # 多人跳帧:检测每帧跑,reg 按人数降频(1人每帧/2~3人隔帧/≥4人隔两帧)。
+    # 按 K2 注册时强制本轮识别(注册优先)。
+    interval = 1
+    if n_faces >= 4:
+        interval = REG_INTERVAL_3
+    elif n_faces >= 2:
+        interval = REG_INTERVAL_2
+    do_reg = interval == 1 or _reg_counter == 0 or k2_pending
+    _reg_counter = (_reg_counter + 1) % interval
+    if det_boxes and landms and _face_reg is not None and do_reg:
+        # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
+        for i in range(min(len(det_boxes), REG_MAX_FACES)):
             try:
                 _face_reg.config_preprocess(landms[i])
                 feature = _face_reg.run(img_np)
@@ -143,22 +162,35 @@ def on_frame(img):
             except Exception as e:
                 print("[face_detect] recog error: %s" % e)
         # K2 注册：注册当前帧最大脸（注册语义不变）
-        if _id_registry is not None and _id_registry.has_pending():
+        if k2_pending:
             max_i = max(range(len(det_boxes)),
                         key=lambda j: det_boxes[j][2] * det_boxes[j][3])
-            try:
-                _face_reg.config_preprocess(landms[max_i])
-                feature = _face_reg.run(img_np)
-                slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
-                if slot is not None:
-                    face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
-                    _db_features[slot] = feature
-                    recognition_results.append((max_i, slot))
-                    if 1 <= slot <= 4:
-                        slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
-                    _refresh_count()
-            except Exception as e:
-                print("[face_detect] register error: %s" % e)
+            det = det_boxes[max_i]
+            w_vga = int(det[2] * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+            h_vga = int(det[3] * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+            if w_vga * h_vga < MIN_REG_AREA:
+                # 脸太小,特征质量差:拒绝注册(长音提示失败)
+                if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+                    _RUNTIME.buzzer.beep(ms=300)
+            else:
+                try:
+                    _face_reg.config_preprocess(landms[max_i])
+                    feature = _face_reg.run(img_np)
+                    slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
+                    if slot is not None:
+                        face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
+                        _db_features[slot] = feature
+                        recognition_results.append((max_i, slot))
+                        if 1 <= slot <= 4:
+                            slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
+                        _refresh_count()
+                except Exception as e:
+                    print("[face_detect] register error: %s" % e)
+    # 非识别帧:复用上轮槽位,保持主机数据连续(坐标滞后≤interval 帧,可接受)
+    if not do_reg and _last_slots is not None:
+        slots = _last_slots
+    else:
+        _last_slots = slots
 
     # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
