@@ -26,7 +26,7 @@
 - `scripts/<category>/app.py` — 功能脚本，统一 `run(runtime)` + 单线程主循环；`_template/` 是复制起点骨架；`_base.py` 是旧架构基类（弃用中）
 - `comm/host_api.py` — UART1 协议栈：握手、帧解析、`CATEGORY_TYPE` 映射、模式切换命令（`TYPE_MODE_SWITCH=0xFF`）
 - `hw/` — `lcd.py`、`buzzer.py`、`touch.py` 板级驱动
-- `config/` + `resource/` — categories.json/app.json + icons/fonts/i18n
+- `config/` + `resource/` — categories.json/app.json + i18n；资源路径注意单复数：实际在用 `resource/font/`（单数，字体 bin）与 `resource/icons/`（复数，图标），`resource/fonts/`、`resource/icon/` 是遗留空目录勿用
 - `tests/` — host 侧 AST/纯 Python 契约测试（板端模块不可导入）；`docs/superpowers/specs|plans/` + `项目记录.md` — 设计/计划/实施记录
 
 ## Conventions
