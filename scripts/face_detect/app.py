@@ -141,6 +141,7 @@ def on_frame(img):
     if do_det:
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
+        gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
 
     recognition_results = []
     slots = [None, None, None, None]
@@ -162,6 +163,7 @@ def on_frame(img):
             try:
                 _face_reg.config_preprocess(landms[i])
                 feature = _face_reg.run(img_np)
+                gc.collect()  # 每张脸推理后立即回收(坑#16:多人/运动时防帧内原生缓冲峰值叠加致 kpu.run 永久阻塞)
                 mid, score = database_search(feature, _db_features)
                 if mid is not None:
                     recognition_results.append((i, mid))
@@ -191,6 +193,7 @@ def on_frame(img):
                 try:
                     _face_reg.config_preprocess(landms[max_i])
                     feature = _face_reg.run(img_np)
+                    gc.collect()  # 注册推理后立即回收(坑#16,与识别循环同策略)
                     slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
                     if slot is not None:
                         face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
