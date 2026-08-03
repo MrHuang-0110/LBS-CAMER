@@ -21,6 +21,8 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
+# 无人脸时检测降频:静止画面结果不变,减少 NPU 原生缓冲分配频率(坑#16 类累积缓解)
+DET_IDLE_INTERVAL = 2
 # 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
 REG_MAX_FACES = 4
 REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
@@ -43,6 +45,8 @@ _save_btn = None
 _close_overlay = False
 _reg_counter = 0     # 多人跳帧计数(每 interval 帧识别一轮)
 _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
+_det_counter = 0     # 无人脸时检测跳帧计数
+_last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 
 
 
@@ -123,9 +127,20 @@ def on_frame(img):
     """
     if _RUNTIME is None or _face_det is None:
         return
+    global _reg_counter, _last_slots, _det_counter, _last_det
     img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
     img_np = img_ai.to_numpy_ref()
-    det_boxes, landms = _face_det.run(img_np)
+    det_boxes, landms = _last_det
+    # 无人脸时检测跳帧(有脸每帧保实时,无脸每 2 帧一次),降低 NPU 原生缓冲分配
+    if det_boxes:
+        _det_counter = 0
+        do_det = True
+    else:
+        _det_counter += 1
+        do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
+    if do_det:
+        det_boxes, landms = _face_det.run(img_np)
+        _last_det = (det_boxes, landms)
 
     recognition_results = []
     slots = [None, None, None, None]
