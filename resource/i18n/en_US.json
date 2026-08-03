@@ -63,10 +63,7 @@
   },
   "tag_detect": {
     "april_tag": "AprilTag",
-    "qr_code": "QR Code",
-    "registered": "Learned %d/4",
-    "clear": "Clear",
-    "save": "Save"
+    "qr_code": "QR Code"
   },
   "object_detect": {
     "registered": "Learned %d/4",

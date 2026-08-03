@@ -63,10 +63,7 @@
   },
   "tag_detect": {
     "april_tag": "AprilTag",
-    "qr_code": "二维码",
-    "registered": "已学习 %d/4",
-    "clear": "清除",
-    "save": "保存"
+    "qr_code": "二维码"
   },
   "object_detect": {
     "registered": "已学习 %d/4",

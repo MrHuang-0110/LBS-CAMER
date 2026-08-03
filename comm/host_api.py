@@ -38,6 +38,10 @@ class HostAPI:
     TYPE_OBJECT_CLASSIFY = 0x12
     TYPE_IMAGE_CLASSIFY  = 0x13
 
+    # 单帧 ID 数据最大槽位数(25×10B=250B ≤ length 字段 255 上限)。
+    # 与 core/tag_scan.MAX_SLOTS 对齐;tag_detect 全屏扫描动态上报用。
+    MAX_ID_SLOTS = 25
+
     # ── 主机→摄像头 脚本切换命令帧 ──
     # 主机 _camer_changer_camer_mode 发:5A 97 A7 01 FF <mode> <chk> A5(8 字节)
     #   [0]=HEAD [1]=src97 [2]=dstA7(=DEV_ID_CAMER) [3]=len=1
@@ -100,12 +104,12 @@ class HostAPI:
         self._last_handshake_ms = 0  # 上次应答握手的时间戳(0=从未应答)
         self._handlers = {}
         # 预分配发送帧缓冲(复用,每帧零分配 → 防主菜单挂机 mem 线性泄漏)。
-        # 帧 = HEAD+SRC+DST+length(4) + type(1) + payload(≤40) + chk(1) + TAIL(1)。
-        # 数据帧 payload 固定 40 → 总 47;握手应答 payload 15 → 总 22。预分配 64 够用。
-        self._tx = bytearray(64)
+        # 帧 = HEAD+SRC+DST+length(4) + type(1) + payload(≤250) + chk(1) + TAIL(1)。
+        # 数据帧 payload 上限 250(25槽×10B,tag_detect 动态) → 总 257;握手应答 payload 15 → 总 22。
+        self._tx = bytearray(257)
         self._tx_len = 0
-        # 预分配 id 数据载荷缓冲(40B),send_id_data 每帧复用,零分配。
-        self._id_payload = bytearray(40)
+        # 预分配 id 数据载荷缓冲(250B),send_id_data 每帧复用,零分配。
+        self._id_payload = bytearray(250)
         # 板端诊断:低频打印实际 category→msg_type 映射,用于排查主机收到类型不对。
         self._diag_tick_count = 0
         self._diag_last_category = None
@@ -151,14 +155,17 @@ class HostAPI:
         if buf[offset + 7] != 0xA5: return None
         return (mode, offset + 8)
 
-    def send_frame(self, msg_type, payload=b''):
+    def send_frame(self, msg_type, payload=b'', length=None):
         """组装并发送完整协议帧(预分配 _tx 复用,每帧零临时分配)。
 
         Args:
             msg_type: 类型码 (int, 1字节)
             payload: 负载数据 (bytes/bytearray)
+            length: 可选实际发送字节数(默认 len(payload);动态载荷用
+                    前 N*10 字节切片,避免再分配)
         """
-        length = len(payload)  # 主机 dataAgreeAnalys: data[3]=length 只算 payload,type 在 data[4] 不计入
+        if length is None:
+            length = len(payload)  # 主机 dataAgreeAnalys: data[3]=length 只算 payload,type 在 data[4] 不计入
         tx = self._tx
         # [HEAD, SRC, DST, length, type, *payload, chk, TAIL]
         tx[0] = self.FRAME_HEAD
@@ -192,39 +199,37 @@ class HostAPI:
         self.send_id_data(self.TYPE_FACE_DETECT, slots)
 
     def send_id_data(self, msg_type, slots=None):
-        """发送4组ID数据（泛化 send_face_data，所有脚本共用）。
+        """发送 N 组 ID 数据(动态数量,泛化 send_face_data,所有脚本共用)。
 
         Args:
             msg_type: 类型码 (int, 1字节)
-            slots: list[4]，每元素 None 或 (id,x,y,w,h,conf)。
-                   None / 越界 → 该组全0。
+            slots: list 或 None。每元素 (id,x,y,w,h,conf)。
+                   N = min(len(slots), MAX_ID_SLOTS);None/空 → 0 字节载荷
+                   (主菜单/相机"无目标"场景,主机按 length 解析)。
                    每组 10 字节: id(1B) + x(2B BE) + y(2B BE)
                                 + w(2B BE) + h(2B BE) + conf(1B)
                    ⚠️ 大端(BE):对齐主机 _camer_cam_data 大端解析
                    (data[off+1]<<8)|data[off+2]。小端会致坐标值错乱。
-                   总计 40 字节数据载荷。
         """
         buf = self._id_payload  # 预分配复用,每帧零分配
-        # 清零(上帧残留:None 槽位须保持 0)
-        for i in range(40):
-            buf[i] = 0
-        for i in range(4):
+        n = 0
+        if slots is not None:
+            n = min(len(slots), self.MAX_ID_SLOTS)
+        for i in range(n):
             off = i * 10
-            slot = slots[i] if (slots is not None and i < len(slots)) else None
-            if slot is not None:
-                fid, x, y, w, h, conf = slot
-                buf[off]     = fid & 0xFF
-                buf[off + 1] = (x >> 8) & 0xFF  # 大端:高字节在前
-                buf[off + 2] = x & 0xFF
-                buf[off + 3] = (y >> 8) & 0xFF
-                buf[off + 4] = y & 0xFF
-                buf[off + 5] = (w >> 8) & 0xFF
-                buf[off + 6] = w & 0xFF
-                buf[off + 7] = (h >> 8) & 0xFF
-                buf[off + 8] = h & 0xFF
-                buf[off + 9] = conf & 0xFF
-            # else: 已清零,保持 0（未使用槽位全0）
-        self.send_frame(msg_type, buf)
+            fid, x, y, w, h, conf = slots[i]
+            buf[off]     = fid & 0xFF
+            buf[off + 1] = (x >> 8) & 0xFF  # 大端:高字节在前
+            buf[off + 2] = x & 0xFF
+            buf[off + 3] = (y >> 8) & 0xFF
+            buf[off + 4] = y & 0xFF
+            buf[off + 5] = (w >> 8) & 0xFF
+            buf[off + 6] = w & 0xFF
+            buf[off + 7] = (h >> 8) & 0xFF
+            buf[off + 8] = h & 0xFF
+            buf[off + 9] = conf & 0xFF
+        # 只发前 n*10 字节:length 参数避免切片分配(零分配保持)
+        self.send_frame(msg_type, buf, length=n * 10)
 
     def tick(self, category_id, slots=None):
         """每帧调：握手轮询 + 按 category 推送4组数据。

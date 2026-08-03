@@ -1,9 +1,10 @@
 # scripts/tag_detect/app.py — AprilTag + 二维码双功能标签识别。
 #
 # 复用 _template 单线程主循环。chn1 QVGA RGB565 做检测(官方 demo 同款),
-# chn0 VGA RGB888 显示。两功能底栏切换(选中置绿),各自独立 ID 设置(最多4),
-# KEY2 注册(走 tag_db.register via registrar),协议类型 0x04 上传4槽位。
-# 持久化预留(flush_to_disk no-op)。
+# chn0 VGA RGB888 显示。两功能底栏切换(选中置绿)。每帧全屏扫描所有可识别
+# 码 → core/tag_scan.build_slots 按 (x,y) 排序(最左=目标1) → 截断 25 →
+# id 编码(AprilTag=实际码值>255截断为255 / QR=排序序号) → 动态数量上报
+# (类型 0x04,载荷 N×10B)。画框统一白色。无按键学习链路。
 
 import os
 import sys
@@ -14,8 +15,7 @@ from media.display import Display
 from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_1
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
-from core.id_registry import IdRegistry
-from core.tag_db import TagDB
+from core import tag_scan
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -25,64 +25,25 @@ CARD_BG = 0x2A2A2A
 CARD_ACTIVE = 0x2E7D32   # 选中卡片绿色
 # chn1 QVGA(320x240) -> chn0 VGA(640x480):坐标 x2 整数缩放
 DET_SCALE = 2
-_APRIL_DB_PATH = "/sdcard/CamerAi/data/tag_april.json"
-_QR_DB_PATH = "/sdcard/CamerAi/data/tag_qr.json"
-
-# 画框配色对齐 face_detect(core/face_ai):未注册白框,注册按 slot 取彩色。
-BOX_COLORS = {
-    1: 0x44CC44,   # 绿
-    2: 0x4488FF,   # 蓝
-    3: 0xFF8844,   # 橙
-    4: 0xCC44FF,   # 紫
-}
-BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
-
-
-def _draw_color(hex_color):
-    """hex 0xRRGGBB -> K230 draw_rectangle color tuple (A, B, G, R)。
-
-    与 face_ai._draw_color 一致:在 RGB888 图上画框用 (A,B,G,R) 顺序。
-    """
-    r = (hex_color >> 16) & 0xFF
-    g = (hex_color >> 8) & 0xFF
-    b = hex_color & 0xFF
-    return (0xFF, b, g, r)
+# 统一画框颜色:白色(用户明确要求,不按序号取色)
+BOX_WHITE = (0xFF, 0xFF, 0xFF, 0xFF)
 
 _RUNTIME = None
 _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_count_label = None
-_id_registry = None
-_april_db = None
-_qr_db = None
 _active_fn = "april"      # "april" | "qr"
 _april_card = None
 _qr_card = None
-_overlay = None
-_clear_btn = None
-_save_btn = None
-_close_overlay = False
-
-
-def _active_db():
-    return _april_db if _active_fn == "april" else _qr_db
-
-
-def _init_registry(fpioa):
-    global _id_registry
-    _id_registry = IdRegistry(fpioa, pin=0)
 
 
 def on_frame(img):
-    """chn1 检测 -> 匹配 DB -> 命中填4槽位 -> chn0 画框 -> host_tick。"""
+    """chn1 检测 → tag_scan 排序/截断/id 映射 → chn0 全白框 → host_tick 动态槽。"""
     if _RUNTIME is None:
         return
     img_det = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_1)
-    slots = [None, None, None, None]
-    db = _active_db()
-    detected = []   # [(code_id, rect), ...]
+    detected = []   # [(code_id, x, y, w, h), ...]
 
     if _active_fn == "april":
         try:
@@ -91,9 +52,8 @@ def on_frame(img):
             print("[tag_detect] apriltag error: %s" % e)
             tags = []
         for tag in tags:
-            code_id = tag.id()
             rect = tag.rect()   # [x, y, w, h] in QVGA
-            detected.append((code_id, rect))
+            detected.append((tag.id(), rect[0], rect[1], rect[2], rect[3]))
     else:
         try:
             codes = img_det.find_qrcodes()
@@ -101,146 +61,22 @@ def on_frame(img):
             print("[tag_detect] qr error: %s" % e)
             codes = []
         for code in codes:
-            code_id = code.payload()
             rect = code.rect()
-            detected.append((code_id, rect))
+            detected.append((code.payload(), rect[0], rect[1], rect[2], rect[3]))
 
-    # 匹配 DB,命中填槽位 + chn0 画框(对齐 face_detect:未注册白框,注册彩色)
-    for code_id, rect in detected:
-        x, y, w, h = [int(v) for v in rect]
-        slot, score = db.match(code_id)
-        if slot is not None:
-            slots[slot - 1] = (slot, x * DET_SCALE, y * DET_SCALE,
-                               w * DET_SCALE, h * DET_SCALE, 100)
-            color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
-            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
-                               w * DET_SCALE, h * DET_SCALE,
-                               color=color, thickness=4)
-            img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
-                                     "ID%d" % slot, color=color)
-        else:
-            color = _draw_color(BOX_UNKNOWN)
-            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
-                               w * DET_SCALE, h * DET_SCALE,
-                               color=color, thickness=2)
+    slots = tag_scan.build_slots(detected, qr_mode=(_active_fn != "april"))
+
+    # 全白框 + 码值标签(排序后 slots 与 detected 同序,取 detected[i][0] 显示)
+    for i, (_id_val, x, y, w, h, _conf) in enumerate(slots):
+        img.draw_rectangle(x, y, w, h, color=BOX_WHITE, thickness=2)
+        img.draw_string_advanced(x, y - 24, 24, "ID:" + str(detected[i][0]),
+                                 color=BOX_WHITE)
 
     # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
-    # KEY2 注册:pending 且当前帧有检测到码 -> 存入下一槽
-    if _id_registry is not None and _id_registry.has_pending() and detected:
-        code_id, _rect = detected[0]
-        slot = _id_registry.try_register(code_id, _RUNTIME.buzzer,
-                                         registrar=db.register)
-        if slot is not None:
-            _refresh_count()
-            _path = _APRIL_DB_PATH if db is _april_db else _QR_DB_PATH
-            db.flush_to_disk(_path)  # 注册即写（on_frame 内，task_handler 前）
-
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
-
-
-def _refresh_count():
-    if _count_label is not None and _RUNTIME is not None:
-        try:
-            _count_label.set_text(
-                _RUNTIME.lang.t("tag_detect.registered", _active_db().count))
-        except Exception:
-            pass
-
-
-def _on_list_clicked(e):
-    """弹出清除/保存浮层(叠加在底栏上方,对齐 face_detect)。"""
-    global _overlay, _clear_btn, _save_btn
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    if _overlay is not None:
-        return
-    from ui.theme import make_back_bar_text_style
-    _overlay = lv.obj(lv.scr_act())
-    _overlay.set_size(lv.pct(100), BAR_H)
-    _overlay.set_pos(0, PREVIEW_Y + PREVIEW_H - BAR_H)
-    _overlay.set_style_bg_color(lv.color_hex(BAR_BG), 0)
-    _overlay.set_style_bg_opa(255, 0)
-    _overlay.set_style_border_width(0, 0)
-    _overlay.set_style_pad_all(0, 0)
-    _overlay.set_style_radius(0, 0)
-    _overlay.clear_flag(lv.obj.FLAG.SCROLLABLE)
-    _overlay.add_flag(lv.obj.FLAG.CLICKABLE)
-    _overlay.add_event(_on_overlay_clicked, lv.EVENT.CLICKED, None)
-
-    _clear_btn = lv.btn(_overlay)
-    _clear_btn.set_size(120, 40)
-    _clear_btn.align(lv.ALIGN.LEFT_MID, 20, 0)
-    cl = lv.label(_clear_btn)
-    cl.set_text(_RUNTIME.lang.t("tag_detect.clear"))
-    cl.add_style(make_back_bar_text_style(fonts.body), 0)
-    cl.center()
-    _clear_btn.add_event(_on_clear_clicked, lv.EVENT.CLICKED, None)
-
-    _save_btn = lv.btn(_overlay)
-    _save_btn.set_size(120, 40)
-    _save_btn.align(lv.ALIGN.RIGHT_MID, -20, 0)
-    sv = lv.label(_save_btn)
-    sv.set_text(_RUNTIME.lang.t("tag_detect.save"))
-    sv.add_style(make_back_bar_text_style(fonts.body), 0)
-    sv.center()
-    _save_btn.add_event(_on_save_clicked, lv.EVENT.CLICKED, None)
-
-
-def _on_overlay_clicked(e):
-    """点浮层空白处关闭浮层。"""
-    global _close_overlay
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    _close_overlay = True
-
-
-def _on_screen_clicked(e):
-    """点 screen 任意位置关闭浮层(浮层开着时)。"""
-    global _close_overlay
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    if _overlay is not None:
-        _close_overlay = True
-
-
-def _on_clear_clicked(e):
-    """清当前激活 db 内存 + 蜂鸣 + 关浮层。不删盘(持久化待定)。"""
-    global _close_overlay
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    _active_db().clear()
-    _refresh_count()
-    if _RUNTIME is not None and _RUNTIME.buzzer is not None:
-        _RUNTIME.buzzer.beep(ms=200)
-    _close_overlay = True
-
-
-def _on_save_clicked(e):
-    """空操作(退出自动持久化,当前 no-op)。只标志关闭浮层。"""
-    global _close_overlay
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    _close_overlay = True
-
-
-def _process_overlay_close():
-    """主循环 deferred 关闭浮层(LVGL use-after-free 防护)。"""
-    global _overlay, _clear_btn, _save_btn, _close_overlay
-    if not _close_overlay:
-        return
-    _close_overlay = False
-    for obj in (_clear_btn, _save_btn, _overlay):
-        if obj is not None:
-            try:
-                obj.delete()
-            except Exception:
-                pass
-    _clear_btn = None
-    _save_btn = None
-    _overlay = None
 
 
 def _switch_fn(fn):
@@ -255,7 +91,6 @@ def _switch_fn(fn):
     if _qr_card is not None:
         _qr_card.set_style_bg_color(
             lv.color_hex(CARD_ACTIVE if fn == "qr" else CARD_BG), 0)
-    _refresh_count()
 
 
 def _make_card(parent, label_key, fn, align_to):
@@ -282,13 +117,11 @@ def _make_card(parent, label_key, fn, align_to):
 
 
 def _build_ui(runtime, exit_flag):
-    """顶栏(back+标题) + 透明预览 + 底栏(list图标 + AprilTag/QR卡片 + 计数)。"""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label
+    """顶栏(back+标题) + 透明预览 + 底栏(list占位图标 + AprilTag/QR卡片)。"""
+    global _screen, _top_bar, _bottom_bar, _preview
     global _april_card, _qr_card
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
-    screen.add_flag(lv.obj.FLAG.CLICKABLE)
-    screen.add_event(_on_screen_clicked, lv.EVENT.CLICKED, None)
     _screen = screen
 
     # 顶栏:返回钮 + 标题
@@ -357,7 +190,7 @@ def _build_ui(runtime, exit_flag):
     _preview.clear_flag(lv.obj.FLAG.SCROLLABLE)
     _preview.clear_flag(lv.obj.FLAG.CLICKABLE)
 
-    # 底栏:list图标(纯显示) + AprilTag卡片 + QR卡片 + 计数
+    # 底栏:list图标(纯占位,不绑定事件) + AprilTag卡片 + QR卡片
     _bottom_bar = lv.obj(screen)
     _bottom_bar.set_size(lv.pct(100), BAR_H)
     _bottom_bar.set_pos(0, PREVIEW_Y + PREVIEW_H)
@@ -368,7 +201,6 @@ def _build_ui(runtime, exit_flag):
     _bottom_bar.set_style_radius(0, 0)
     _bottom_bar.clear_flag(lv.obj.FLAG.SCROLLABLE)
 
-    # list 图标(点击弹清除/保存浮层,对齐 face_detect)
     list_btn = lv.obj(_bottom_bar)
     list_btn.set_size(48, 48)
     list_btn.align(lv.ALIGN.LEFT_MID, 2, 0)
@@ -376,8 +208,7 @@ def _build_ui(runtime, exit_flag):
     list_btn.set_style_border_width(0, 0)
     list_btn.set_style_pad_all(0, 0)
     list_btn.clear_flag(lv.obj.FLAG.SCROLLABLE)
-    list_btn.add_flag(lv.obj.FLAG.CLICKABLE)
-    list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
+    # 不 add_flag(CLICKABLE)、不加事件:纯占位(用户要求)
     list_icon_data, list_icon_dsc = icon_cache.get_tag_icon("list")
     if list_icon_dsc is not None and list_icon_data is not None:
         import struct
@@ -396,32 +227,20 @@ def _build_ui(runtime, exit_flag):
     _april_card = _make_card(_bottom_bar, "tag_detect.april_tag", "april", 56)
     _qr_card = _make_card(_bottom_bar, "tag_detect.qr_code", "qr", 174)
 
-    count_label = lv.label(_bottom_bar)
-    count_label.set_text(runtime.lang.t("tag_detect.registered", 0))
-    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
-    count_label.align(lv.ALIGN.RIGHT_MID, -12, 0)
-    _count_label = count_label
-
 
 def _destroy_ui():
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label, _april_card, _qr_card
-    global _overlay, _clear_btn, _save_btn
-    for obj in (_clear_btn, _save_btn, _overlay, _april_card, _qr_card,
-                _top_bar, _bottom_bar, _preview, _count_label):
+    global _screen, _top_bar, _bottom_bar, _preview, _april_card, _qr_card
+    for obj in (_april_card, _qr_card, _top_bar, _bottom_bar, _preview):
         if obj is not None:
             try:
                 obj.delete()
             except Exception:
                 pass
-    _clear_btn = None
-    _save_btn = None
-    _overlay = None
     _april_card = None
     _qr_card = None
     _top_bar = None
     _bottom_bar = None
     _preview = None
-    _count_label = None
     try:
         from ui.theme import Colors
         scr = lv.scr_act()
@@ -434,16 +253,10 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _april_db, _qr_db
+    global _RUNTIME
     _RUNTIME = runtime
-    _april_db = TagDB()
-    _qr_db = TagDB()
-    _april_db.load_from_disk(_APRIL_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
-    _qr_db.load_from_disk(_QR_DB_PATH)
     exit_flag = [False]
-    _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
-    _refresh_count()  # load 后刷新计数（显示当前 active DB 已学习数量）
     fc = 0
     try:
         while not exit_flag[0]:
@@ -457,9 +270,6 @@ def run(runtime):
                     sys.print_exception(e)
                 except Exception:
                     pass
-            if _id_registry is not None:
-                _id_registry.poll_k2()
-            _process_overlay_close()
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
@@ -467,8 +277,4 @@ def run(runtime):
                 print("[tag_detect] fc=%d" % fc)
     finally:
         _destroy_ui()
-        if _april_db is not None:
-            _april_db.flush_to_disk(_APRIL_DB_PATH)
-        if _qr_db is not None:
-            _qr_db.flush_to_disk(_QR_DB_PATH)
         _RUNTIME = None
