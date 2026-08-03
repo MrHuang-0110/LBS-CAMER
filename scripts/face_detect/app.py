@@ -28,7 +28,7 @@ REG_MAX_FACES = 4
 REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
 REG_INTERVAL_3 = 3   # ≥4 人:每 3 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
-DIAG_SKIP_AI = False  # 诊断用:True=跳过 chn2/AI/画框只发空槽(二分 AI vs 显示链路,定位后删除)
+DIAG_SKIP_AI = True  # 诊断用:True=跳过 chn2/AI/画框只发空槽(二分 AI vs 显示链路,定位后删除)
 
 _RUNTIME = None
 _screen = None
@@ -135,10 +135,8 @@ def on_frame(img):
             _RUNTIME.host_tick([None, None, None, None])
         return
     global _reg_counter, _last_slots, _det_counter, _last_det
-    img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-    img_np = img_ai.to_numpy_ref()
     det_boxes, landms = _last_det
-    # 无人脸时检测跳帧(有脸每帧保实时,无脸每 2 帧一次),降低 NPU 原生缓冲分配
+    # 无人脸时检测跳帧(有脸每帧保实时,无脸每 2 帧一次)
     if det_boxes:
         _det_counter = 0
         do_det = True
@@ -146,6 +144,11 @@ def on_frame(img):
         _det_counter += 1
         do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
     if do_det:
+        # 检测帧才取 chn2 帧:非检测帧跳过 chn2 大分辨率(1024x768) DMA 取流,
+        # 减半其与显示 DMA(OSD1+OSD2 flush)的竞争——第一轮插桩证据:
+        # 死机在 pre-show(显示侧)且 DIAG_SKIP_AI(跳 chn2)不死机
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        img_np = img_ai.to_numpy_ref()
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
         gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
