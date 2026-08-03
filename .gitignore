@@ -28,3 +28,10 @@ Thumbs.db
 
 # ===== 误建目录 / Typo dirs =====
 reousrce/
+
+# ===== 本机 AI 工具配置（不入库） =====
+.agents/
+.claude/
+.superpowers/
+.reasonix/
+.idea/
