@@ -28,7 +28,6 @@ REG_MAX_FACES = 4
 REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
 REG_INTERVAL_3 = 3   # ≥4 人:每 3 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
-DIAG_SKIP_AI = True  # 诊断用:True=跳过 chn2/AI/画框只发空槽(二分 AI vs 显示链路,定位后删除)
 
 _RUNTIME = None
 _screen = None
@@ -127,12 +126,6 @@ def on_frame(img):
     ⚠️ 多脸 reg 为板端首次验证（坑#16 NPU 累积风险，见 spec 降级方案）。
     """
     if _RUNTIME is None or _face_det is None:
-        return
-    if DIAG_SKIP_AI:
-        # 诊断:跳过 AI 推理与画框,只保 host_tick 空槽——若开此开关不死机,
-        # 根因在 AI/NPU 链路;若仍死机,根因在显示/UART/框架链路(定位后删除)
-        if _RUNTIME is not None and _RUNTIME.host is not None:
-            _RUNTIME.host_tick([None, None, None, None])
         return
     global _reg_counter, _last_slots, _det_counter, _last_det
     det_boxes, landms = _last_det
@@ -501,14 +494,12 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
-            if fc % 30 == 0:
-                print("[face_detect] fc=%d pre-show" % fc)  # 诊断:死机定位标记,定位后删
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
-            gc.collect()
+            gc.collect()  # 放在 show_image 之后、task_handler 之前，避免 AI 推理后立即 GC 阻塞 DMA
             time.sleep_ms(lv.task_handler())
             fc += 1
             if fc % 30 == 0:
-                print("[face_detect] fc=%d" % fc)  # 诊断:post-task 标记,定位后删
+                print("[face_detect] fc=%d" % fc)
                 if fc % 300 == 0:
                     import gc as _gc; print("[face_detect] mem_free=%d" % _gc.mem_free())
     finally:
