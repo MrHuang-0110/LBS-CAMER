@@ -26,7 +26,8 @@ DET_IDLE_INTERVAL = 2
 # 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
 REG_MAX_FACES = 4
 REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
-REG_INTERVAL_3 = 3   # ≥4 人:每 3 帧识别一轮
+REG_INTERVAL_3 = 4   # ≥4 人:每 4 帧识别一轮(多人每帧 4 次 reg + ~10 次 gc.collect
+                     # 全堆扫描开销大,降频压平均负载;识别延迟 ~130ms 可接受)
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 
 _RUNTIME = None
