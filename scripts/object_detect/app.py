@@ -31,6 +31,9 @@ BOX_COLORS = {
     4: 0xCC44FF,   # 紫
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+det),其余帧用缓存结果
+# 画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
+DET_INTERVAL = 2
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
@@ -61,6 +64,10 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
+_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
+_last_max = {}            # 上轮 per_class_max 缓存(非检测帧画框用)
+_last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
+_pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 
 
 def _init_ai():
@@ -106,28 +113,46 @@ def on_frame(img):
     """
     if _RUNTIME is None or _object_det is None:
         return
-    img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-    img_np = img_ai.to_numpy_ref()
-    try:
-        dets = _object_det.run(img_np)
-    except Exception as e:
-        print("[object_detect] run error: %s" % e)
-        dets = []
-
+    global _det_counter, _last_max, _last_slots
+    per_class_max = _last_max
     slots = [None, None, None, None]
-    # 每类别取面积最大实例
-    per_class_max = {}   # class_id -> [l,t,r,b,score,cid]
-    for det in dets:
+    _det_counter += 1
+    do_det = (_det_counter % DET_INTERVAL == 0)
+    if do_det:
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        img_np = img_ai.to_numpy_ref()
         try:
-            l, t, r, b, score, cid = [float(v) for v in det]
-        except Exception:
-            continue
-        cid = int(cid)
-        area = (r - l) * (b - t)
-        cur = per_class_max.get(cid)
-        if cur is None or area > (cur[2] - cur[0]) * (cur[3] - cur[1]):
-            per_class_max[cid] = [l, t, r, b, score, cid]
-
+            dets = _object_det.run(img_np)
+        except Exception as e:
+            print("[object_detect] run error: %s" % e)
+            dets = []
+        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
+        # 每类别取面积最大实例
+        per_class_max = {}   # class_id -> [l,t,r,b,score,cid]
+        for det in dets:
+            try:
+                l, t, r, b, score, cid = [float(v) for v in det]
+            except Exception:
+                continue
+            cid = int(cid)
+            area = (r - l) * (b - t)
+            cur = per_class_max.get(cid)
+            if cur is None or area > (cur[2] - cur[0]) * (cur[3] - cur[1]):
+                per_class_max[cid] = [l, t, r, b, score, cid]
+        _last_max = per_class_max
+        # KEY2 注册:当前帧最大框的类别(检测帧才有新鲜 dets)
+        if _id_registry is not None and _id_registry.has_pending() and per_class_max:
+            max_cid = max(per_class_max.values(),
+                          key=lambda d: (d[2] - d[0]) * (d[3] - d[1]))[5]
+            try:
+                slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
+                                                 registrar=_db.register)
+                if slot is not None:
+                    _db.flush_to_disk(_OBJ_DB_PATH)  # 注册即写(task_handler 前安全窗口)
+                    _refresh_count()
+            except Exception as e:
+                print("[object_detect] register error: %s" % e)
+    # 画框:每帧(检测帧新框/非检测帧缓存框;类别精确匹配每帧重算,无窜脸)
     for cid, det in per_class_max.items():
         l, t, r, b, score, _ = det
         slot, _score = _db.match(cid)
@@ -150,19 +175,11 @@ def on_frame(img):
     # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
-    # KEY2 注册:当前帧最大框的类别 -> 下一槽
-    if _id_registry is not None and _id_registry.has_pending() and per_class_max:
-        max_cid = max(per_class_max.values(),
-                      key=lambda d: (d[2] - d[0]) * (d[3] - d[1]))[5]
-        try:
-            slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
-                                             registrar=_db.register)
-            if slot is not None:
-                _db.flush_to_disk(_OBJ_DB_PATH)
-                _refresh_count()
-        except Exception as e:
-            print("[object_detect] register error: %s" % e)
-
+    # 非检测帧:复用上轮槽位,保持主机数据连续
+    if not do_det and _last_slots is not None:
+        slots = _last_slots
+    else:
+        _last_slots = slots
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
 
@@ -230,12 +247,13 @@ def _on_screen_clicked(e):
 
 
 def _on_clear_clicked(e):
-    """清 db 内存 + 蜂鸣 + 关浮层。不删盘(持久化待定)。"""
-    global _close_overlay
+    """清 db 内存 + 置持久化标志(主循环安全窗口写空库)。"""
+    global _close_overlay, _pending_clear_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     if _db is not None:
         _db.clear()
+    _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -415,7 +433,7 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _db
+    global _RUNTIME, _db, _pending_clear_flush
     _RUNTIME = runtime
     _db = ObjectDB()
     _db.load_from_disk(_OBJ_DB_PATH)
@@ -440,6 +458,10 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
+            if _pending_clear_flush:
+                _pending_clear_flush = False
+                if _db is not None:
+                    _db.flush_to_disk(_OBJ_DB_PATH)  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
             time.sleep_ms(lv.task_handler())

@@ -30,6 +30,10 @@ BOX_COLORS = {
     4: 0xCC44FF,   # 紫
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# 检测/识别一体降频:每 DET_INTERVAL 帧跑一次完整 run(chn2 取流+NPU),
+# 其余帧用缓存框+缓存识别结果画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
+DET_INTERVAL = 2
+MIN_REG_AREA = 3600  # 注册最小人体面积(rgb888p px²,≈60×60);太小拒绝注册(特征质量差)
 
 
 def _draw_color(hex_color):
@@ -61,6 +65,11 @@ _DEBUG_DIAG = False
 _diag_fc = 0
 _save_btn = None
 _close_overlay = False
+_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整 run)
+_last_det = ([], [])      # 上轮 (det_boxes, features) 缓存
+_last_rec = {}            # 上轮识别结果 {det_idx: slot}
+_last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
+_pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 
 
 def _init_ai():
@@ -107,76 +116,106 @@ def _deinit_ai():
         _person_rec = None
 
 
-def on_frame(img):
-    """chn2 检测+提特征 → 每个人体余弦匹配 → 画框 + ID 标签 → host_tick。
+def _draw_body_boxes(img, det_boxes, rec):
+    """画人体框 + ID 标签。rec: {det_idx: slot};无 slot → 白框 person。
 
-    对每个检测到的人体:database_search 匹配 DB → 找到 slot 则彩色框+ID#序号标签;
-    未注册白框+person 标签。K2 注册当前帧最大人体的特征(复用 run() 已提取的 feature)。
+    坐标:chn2 1024x768 → VGA 640x480 缩放。识别帧与非检测帧共用。
     """
-    if _RUNTIME is None or _person_rec is None:
-        return
-    img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-    img_np = img_ai.to_numpy_ref()
-    try:
-        det_boxes, features = _person_rec.run(img_np)
-    except Exception as e:
-        print("[body_detect] run error: %s" % e)
-        det_boxes, features = [], []
-
-    slots = [None, None, None, None]
-    filled_slots = set()  # 本帧已填充的 slot(防多人体匹配同一 slot 覆盖)
-
-    global _diag_fc
-    _diag_fc += 1
-
-    for det_box, feature in zip(det_boxes, features):
+    for i, det_box in enumerate(det_boxes):
         x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
-        # 缩放到 VGA
         x = int(x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         y = int(y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
         w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-        slot, score = database_search(feature, _db_features)
-        if _DEBUG_DIAG and _db_features and _diag_fc % 15 == 0:
-            # threshold=0.0 取原始最佳分数(score=cos/2+0.5 → cos=score*2-1)
-            _rid, _rscore = database_search(feature, _db_features, threshold=0.0)
-            _cos = _rscore * 2 - 1 if _rscore > 0 else 0.0
-            print("[body_diag] cos=%.3f vs id%s -> match=%s(%.2f)" %
-                  (_cos, _rid, slot, score))
-        if slot is not None and slot not in filled_slots:
+        slot = rec.get(i)
+        if slot:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
             img.draw_rectangle(x, y, w, h, color=color, thickness=4)
-            conf = int(score * 100)
-            img.draw_string_advanced(x + 2, y - 24, 24,
-                                     "ID%d person" % slot, color=color)
-            slots[slot - 1] = (slot, x, y, w, h, conf)
-            filled_slots.add(slot)
+            img.draw_string_advanced(x + 2, y - 24, 24, "ID%d person" % slot, color=color)
         else:
             color = _draw_color(BOX_UNKNOWN)
             img.draw_rectangle(x, y, w, h, color=color, thickness=2)
             img.draw_string_advanced(x + 2, y - 24, 24, "person", color=color)
 
+
+def on_frame(img):
+    """chn2 检测+提特征 → 识别匹配 → 画框+ID → host_tick。
+
+    检测/识别一体降频(DET_INTERVAL):检测帧跑完整 run(chn2 取流+NPU,
+    run 后立即 gc 回收原生缓冲,防坑#16 累积死机),非检测帧用缓存框+
+    缓存识别结果画框(ID 稳定不闪,索引与缓存框一致无窜脸)。K2 注册只在
+    检测帧(有新鲜 features)。
+    """
+    global _diag_fc, _det_counter, _last_det, _last_rec, _last_slots
+    if _RUNTIME is None or _person_rec is None:
+        return
+    det_boxes, features = _last_det
+    rec = _last_rec
+    slots = [None, None, None, None]
+    _det_counter += 1
+    do_det = (_det_counter % DET_INTERVAL == 0)
+    if do_det:
+        # 检测帧:chn2 取流 + 完整 run(det + 每人提特征)
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        img_np = img_ai.to_numpy_ref()
+        try:
+            det_boxes, features = _person_rec.run(img_np)
+        except Exception as e:
+            print("[body_detect] run error: %s" % e)
+            det_boxes, features = [], []
+        _last_det = (det_boxes, features)
+        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
+        # 识别匹配 + 填槽(帧内 ID 去重:一个 slot 只标一个框)
+        rec = {}
+        filled_slots = set()
+        _diag_fc += 1
+        for i, (det_box, feature) in enumerate(zip(det_boxes, features)):
+            x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
+            x = int(x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+            y = int(y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+            w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+            h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+            slot, score = database_search(feature, _db_features)
+            if _DEBUG_DIAG and _db_features and _diag_fc % 15 == 0:
+                # threshold=0.0 取原始最佳分数(score=cos/2+0.5 → cos=score*2-1)
+                _rid, _rscore = database_search(feature, _db_features, threshold=0.0)
+                _cos = _rscore * 2 - 1 if _rscore > 0 else 0.0
+                print("[body_diag] cos=%.3f vs id%s -> match=%s(%.2f)" %
+                      (_cos, _rid, slot, score))
+            if slot is not None and slot not in filled_slots:
+                filled_slots.add(slot)
+                rec[i] = slot
+                conf = int(score * 100)
+                if 1 <= slot <= 4:
+                    slots[slot - 1] = (slot, x, y, w, h, conf)
+        _last_rec = rec
+        # K2 注册:当前帧最大人体(检测帧才有新鲜 features)
+        if _id_registry is not None and _id_registry.has_pending() and det_boxes:
+            max_i = max(range(len(det_boxes)),
+                        key=lambda j: (det_boxes[j][4] - det_boxes[j][2])
+                                      * (det_boxes[j][5] - det_boxes[j][3]))
+            det = det_boxes[max_i]
+            if max_i < len(features) and \
+                    (det[4] - det[2]) * (det[5] - det[3]) >= MIN_REG_AREA:
+                try:
+                    slot = _id_registry.try_register(
+                        features[max_i], _RUNTIME.buzzer,
+                        registrar=body_db.register)
+                    if slot is not None:
+                        body_db.flush_to_disk()  # 注册即写(task_handler 前安全窗口)
+                        _db_features[slot] = body_db.get_features().get(slot)
+                        _refresh_count()
+                except Exception as e:
+                    print("[body_detect] register error: %s" % e)
+    # 画框:每帧(检测帧新框/非检测帧缓存框;ID 与框同源,索引一致)
+    _draw_body_boxes(img, det_boxes, rec)
     # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
-
-    # K2 注册:当前帧最大人体的特征(复用 run() 已提取的 features[max_i])
-    if _id_registry is not None and _id_registry.has_pending() and det_boxes:
-        max_i = max(range(len(det_boxes)),
-                    key=lambda j: (det_boxes[j][4] - det_boxes[j][2])
-                                  * (det_boxes[j][5] - det_boxes[j][3]))
-        if max_i < len(features):
-            feature = features[max_i]
-            try:
-                slot = _id_registry.try_register(
-                    feature, _RUNTIME.buzzer,
-                    registrar=body_db.register)
-                if slot is not None:
-                    body_db.flush_to_disk()
-                    _db_features[slot] = body_db.get_features().get(slot)
-                    _refresh_count()
-            except Exception as e:
-                print("[body_detect] register error: %s" % e)
-
+    # 非检测帧:复用上轮槽位,保持主机数据连续
+    if not do_det and _last_slots is not None:
+        slots = _last_slots
+    else:
+        _last_slots = slots
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
 
@@ -250,6 +289,7 @@ def _on_clear_clicked(e):
         return
     body_db.clear()
     _db_features.clear()
+    _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -427,7 +467,7 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME
+    global _RUNTIME, _pending_clear_flush
     _RUNTIME = runtime
     exit_flag = [False]
     _init_ai()
@@ -449,6 +489,9 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
+            if _pending_clear_flush:
+                _pending_clear_flush = False
+                body_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
             time.sleep_ms(lv.task_handler())
