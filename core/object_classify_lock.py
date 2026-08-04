@@ -6,7 +6,8 @@
 #
 # 纯 Python(复用 object_classify_db.cosine_score)→ host 端可单测。
 
-from core.object_classify_db import cosine_score, OBJECT_CLASSIFY_MATCH_THRESHOLD
+from core.object_classify_db import (cosine_score, OBJECT_CLASSIFY_MATCH_THRESHOLD,
+                                      OBJECT_CLASSIFY_MATCH_MARGIN)
 
 
 def select_lock_index(locked_feature, features, threshold=OBJECT_CLASSIFY_MATCH_THRESHOLD):
@@ -15,20 +16,28 @@ def select_lock_index(locked_feature, features, threshold=OBJECT_CLASSIFY_MATCH_
     Args:
         locked_feature: 锁定特征(plain list)或 None。
         features: list[feature],本帧各检测框的特征(与 det_boxes 等长同序)。
-        threshold: score=cos/2+0.5 的命中阈值(默认 0.75,同 DB)。
+        threshold: score=cos/2+0.5 的命中阈值(默认同 DB)。
     Returns:
-        (index, score):最匹配的特征在 features 中的索引与 score;无/低于阈值 → (None, 0.0)。
+        (index, score):最匹配的特征在 features 中的索引与 score;无/低于阈值
+        或 best-second < MARGIN(防相似物体锁错) → (None, 0.0)。
     """
     if not features or locked_feature is None:
         return None, 0.0
     best_i = None
     best_score = 0.0
+    second_score = 0.0
     for i, f in enumerate(features):
         sc = cosine_score(locked_feature, f)
         if sc > best_score:
+            second_score = best_score
             best_score = sc
             best_i = i
+        elif sc > second_score:
+            second_score = sc
     if best_score < threshold:
+        return None, 0.0
+    # 防相似物体锁错:best 与 second 差距过小 → 判不确定,不锁
+    if len(features) >= 2 and (best_score - second_score) < OBJECT_CLASSIFY_MATCH_MARGIN:
         return None, 0.0
     return best_i, best_score
 

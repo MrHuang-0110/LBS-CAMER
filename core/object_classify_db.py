@@ -13,9 +13,11 @@ from core import db_store
 
 OBJECT_CLASSIFY_DB_PATH = "/sdcard/CamerAi/data/object_classify_db.json"
 
-# 默认匹配阈值(score=cos/2+0.5 映射后)。0.75 ⇒ cos≥0.5,对齐 body_db/face_db。
-# ⚠️ 勿用 0.5:0.5 ⇒ cos≥0,CNN 自然图像特征几乎总正相关 → 所有人都命中同一 ID。
-OBJECT_CLASSIFY_MATCH_THRESHOLD = 0.75
+# 默认匹配阈值(score=cos/2+0.5 映射后)。0.82 ⇒ cos≥0.64,对齐 face_db 修复。
+# ⚠️ 勿用 0.5:0.5 ⇒ cos≥0,CNN 自然图像特征几乎总正相关 → 所有目标命中同一 ID。
+OBJECT_CLASSIFY_MATCH_THRESHOLD = 0.82
+# 多人/多物体注册时 best 与 second 的最小分数差。差更小 → 判不确定。
+OBJECT_CLASSIFY_MATCH_MARGIN = 0.06
 
 
 def _to_list(feat):
@@ -64,12 +66,19 @@ def database_search(feature, db_features, threshold=OBJECT_CLASSIFY_MATCH_THRESH
         return None, 0.0
     best_id = None
     best_score = 0.0
+    second_score = 0.0
     for slot_id, db_feat in db_features.items():
         sc = cosine_score(feature, db_feat)
         if sc > best_score:
+            second_score = best_score
             best_score = sc
             best_id = slot_id
+        elif sc > second_score:
+            second_score = sc
     if best_score < threshold:
+        return None, 0.0
+    # 次佳区分:注册多人且 best/second 差距过小 → 特征不可区分,拒绝
+    if len(db_features) >= 2 and (best_score - second_score) < OBJECT_CLASSIFY_MATCH_MARGIN:
         return None, 0.0
     return best_id, best_score
 
