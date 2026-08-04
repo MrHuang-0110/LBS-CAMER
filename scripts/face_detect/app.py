@@ -1,7 +1,9 @@
-# scripts/face_detect/app.py — Phase 1 face detection on the single-thread template.
+# scripts/face_detect/app.py — 人脸检测/识别/注册(单线程模板)。
 #
-# Core loop: snapshot chn0 → on_frame(chn2 AI detect + draw boxes) → show_image →
-# lv.task_handler. No AI thread, no self media init, no registration/DB in Phase 1.
+# 主循环:snapshot chn0 → on_frame(chn2 AI 检测+识别+画框) → show_image →
+# lv.task_handler。单线程串行:无 AI 线程、无自建 media/Display。
+# 检测/识别按 DET_IDLE_INTERVAL 与 REG_INTERVAL_* 降频;K2 注册取最大脸;
+# 注册即写/清除即写走主循环 task_handler 前安全窗口 flush(坑#2 不冲突)。
 
 import gc
 import os
@@ -23,12 +25,12 @@ PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测一次(框滞后≤1帧),降 NPU+GC 负载提帧率
 DET_IDLE_INTERVAL = 2
-# 识别降频(帧率优先):1人每2帧/2~3人每4帧/≥4人每6帧识别一轮。
-# 非识别帧复用上轮结果,ID 框延迟≤200ms;每帧 NPU+GC 工作量大幅下降
-REG_MAX_FACES = 4
-REG_INTERVAL_1 = 2
-REG_INTERVAL_2 = 4
-REG_INTERVAL_3 = 6
+# 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
+# ID 更新延迟≤200ms,每帧 NPU+GC 工作量大幅下降
+REG_MAX_FACES = 4    # 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
+REG_INTERVAL_1 = 2   # 1 人:每 2 帧识别一轮
+REG_INTERVAL_2 = 4   # 2~3 人:每 4 帧识别一轮
+REG_INTERVAL_3 = 6   # ≥4 人:每 6 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 
 _RUNTIME = None
@@ -45,9 +47,9 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
-_reg_counter = 0     # 多人跳帧计数(每 interval 帧识别一轮)
+_reg_counter = 0     # 识别跳帧计数(每 reg_interval 帧识别一轮)
 _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
-_det_counter = 0     # 检测跳帧计数
+_det_counter = 0     # 检测跳帧计数(每 DET_IDLE_INTERVAL 帧检测一次)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
 
@@ -146,17 +148,20 @@ def on_frame(img):
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
         gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
+        # 检测坐标(chn2 1024x768)→ VGA 640x480 缩放因子,识别/注册共用
+        disp_w, disp_h = _face_det.display_size
+        rgb_w, rgb_h = _face_det.rgb888p_size
         # 识别判定仅在检测帧(有新鲜 det 结果与 img_np):按人数降频,K2 注册强制。
         # ⚠️ 不可放检测块外:do_reg 若落在非检测帧,img_np 未定义 → NameError
         n_faces = len(det_boxes) if det_boxes else 0
         k2_pending = _id_registry is not None and _id_registry.has_pending()
-        interval = REG_INTERVAL_1
+        reg_interval = REG_INTERVAL_1
         if n_faces >= 4:
-            interval = REG_INTERVAL_3
+            reg_interval = REG_INTERVAL_3
         elif n_faces >= 2:
-            interval = REG_INTERVAL_2
+            reg_interval = REG_INTERVAL_2
         do_reg = _reg_counter == 0 or k2_pending
-        _reg_counter = (_reg_counter + 1) % interval
+        _reg_counter = (_reg_counter + 1) % reg_interval
         if det_boxes and landms and _face_reg is not None and do_reg:
             # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
             for i in range(min(len(det_boxes), REG_MAX_FACES)):
@@ -169,10 +174,10 @@ def on_frame(img):
                         recognition_results.append((i, mid))
                         det = det_boxes[i]
                         x, y, w, h = det[:4]
-                        x = int(x * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-                        y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-                        w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-                        h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                        x = int(x * disp_w // rgb_w)
+                        y = int(y * disp_h // rgb_h)
+                        w = int(w * disp_w // rgb_w)
+                        h = int(h * disp_h // rgb_h)
                         conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
                         if 1 <= mid <= 4:
                             slots[mid - 1] = (mid, x, y, w, h, conf)
@@ -182,9 +187,9 @@ def on_frame(img):
             if k2_pending:
                 max_i = max(range(len(det_boxes)),
                             key=lambda j: det_boxes[j][2] * det_boxes[j][3])
-                det = det_boxes[max_i]
-                w_vga = int(det[2] * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-                h_vga = int(det[3] * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                max_det = det_boxes[max_i]
+                w_vga = int(max_det[2] * disp_w // rgb_w)
+                h_vga = int(max_det[3] * disp_h // rgb_h)
                 if w_vga * h_vga < MIN_REG_AREA:
                     # 脸太小,特征质量差:拒绝注册(长音提示失败)
                     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
@@ -286,7 +291,7 @@ def _on_screen_clicked(e):
 
 
 def _on_clear_clicked(e):
-    """清除内存特征 + 置持久化标志(主循环安全窗口写空库)。"""
+    """清除:清空内存特征 + 置写盘标志,主循环安全窗口立即写空库(防断电旧数据回魂)。"""
     global _close_overlay, _pending_clear_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
@@ -300,7 +305,7 @@ def _on_clear_clicked(e):
 
 
 def _on_save_clicked(e):
-    """空操作（退出自动持久化，当前 no-op）。只标志关闭浮层。"""
+    """保存:持久化已由注册即写/退出兜底覆盖,此处仅关闭浮层。"""
     global _close_overlay
     if e.get_code() != lv.EVENT.CLICKED:
         return
@@ -504,7 +509,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[face_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    import gc as _gc; print("[face_detect] mem_free=%d" % _gc.mem_free())
+                    print("[face_detect] mem_free=%d" % gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()
