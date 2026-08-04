@@ -64,12 +64,13 @@ def on_frame(img):
             rect = code.rect()
             detected.append((code.payload(), rect[0], rect[1], rect[2], rect[3]))
 
-    slots = tag_scan.build_slots(detected, qr_mode=(_active_fn != "april"))
+    slots, codes = tag_scan.build_slots(
+        detected, qr_mode=(_active_fn != "april"), return_codes=True)
 
-    # 全白框 + 码值标签(排序后 slots 与 detected 同序,取 detected[i][0] 显示)
+    # 全白框 + 码值标签(codes 与 slots 同序:码值与框一一对应,防 ID 错位)
     for i, (_id_val, x, y, w, h, _conf) in enumerate(slots):
         img.draw_rectangle(x, y, w, h, color=BOX_WHITE, thickness=2)
-        img.draw_string_advanced(x, y - 24, 24, "ID:" + str(detected[i][0]),
+        img.draw_string_advanced(x, y - 24, 24, "ID:" + str(codes[i]),
                                  color=BOX_WHITE)
 
     # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)

@@ -134,6 +134,7 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
+_pending_flush = False  # 清除/保存写盘请求:主循环安全窗口 flush(坑#2:LVGL 回调内 flush 会死锁)
 
 
 def _select_cell(key):
@@ -320,11 +321,11 @@ def _on_overlay_clicked(e):
 
 
 def _on_clear_clicked(e):
-    global _close_overlay
+    global _close_overlay, _pending_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     _road_db.clear()
-    _road_db.flush_to_disk(_ROAD_DB_PATH)
+    _pending_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(坑#2:回调内 flush 会死锁)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -332,7 +333,7 @@ def _on_clear_clicked(e):
 
 
 def _on_save_clicked(e):
-    global _close_overlay
+    global _close_overlay, _pending_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     cur_th = _current_threshold_tuple()
@@ -341,7 +342,7 @@ def _on_save_clicked(e):
                (cur_th[4] + cur_th[5]) // 2)
     latest_rgb = _swatch[2][1] if _swatch[2] is not None else 0xFFFFFF
     _road_db.save(cur_th, lab_mid, latest_rgb, list(_swatch))
-    _road_db.flush_to_disk(_ROAD_DB_PATH)
+    _pending_flush = True  # 保存即写盘:主循环安全窗口(坑#2:回调内 flush 会死锁)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -688,7 +689,7 @@ def _destroy_ui():
 
 
 def run(runtime):
-    global _RUNTIME, _road_db
+    global _RUNTIME, _road_db, _pending_flush
     _RUNTIME = runtime
     _road_db = RoadDB()
     entry = _road_db.load_from_disk(_ROAD_DB_PATH)
@@ -733,6 +734,10 @@ def run(runtime):
                 except Exception:
                     pass
             _process_overlay_close()
+            if _pending_flush:
+                _pending_flush = False
+                if _road_db is not None:
+                    _road_db.flush_to_disk(_ROAD_DB_PATH)  # 清除/保存即写盘(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1

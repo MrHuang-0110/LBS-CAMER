@@ -10,10 +10,29 @@
 #   握手成功后主机不再发握手帧，摄像头按当前脚本类型周期推送数据。
 #
 # 所有 stream 模式脚本 APP 通过 ctx.host 调用本接口发送数据。
-# 类型码见 通讯协议.txt 类型表（0x01主菜单 ~ 0x0B图像分类）。
+# 统一动态 N 组协议:所有模式载荷 = N×10B(N=本帧实际目标数,不补齐),
+# 槽位按 (x,y) 升序(最左=目标1),上限:tag=25 / 其它注册类=4。
+# 类型码见 通讯协议.txt 类型表（0x01主菜单 ~ 0x13图像分类）。
 
 from machine import UART
 import time as _time
+
+
+# ── 统一动态 N 组协议:槽位排序/截断 ──
+MAX_REG_SLOTS = 4   # 非标签模式注册槽上限(与各脚本固定 4 槽语义对齐)
+
+
+def order_slots(filled, max_slots=MAX_REG_SLOTS):
+    """统一槽位排序:过滤空槽 → 按 (x,y) 升序(最左=目标1) → 截断 max_slots。
+
+    与 core/tag_scan.build_slots 排序规则一致;id 字段保持各模式原语义
+    (注册槽号/类别槽号/码值不变),仅槽位发送顺序按屏幕位置。
+    filled: list[(id,x,y,w,h,conf) 或 None];坐标须已为发送单位(VGA)。
+    Returns: list[(id,x,y,w,h,conf)],无命中 → []。
+    """
+    items = [s for s in filled if s is not None]
+    items = sorted(items, key=lambda t: (t[1], t[2]))
+    return items[:max_slots]
 
 
 class HostAPI:
@@ -39,7 +58,7 @@ class HostAPI:
     TYPE_IMAGE_CLASSIFY  = 0x13
 
     # 单帧 ID 数据最大槽位数(25×10B=250B ≤ length 字段 255 上限)。
-    # 与 core/tag_scan.MAX_SLOTS 对齐;tag_detect 全屏扫描动态上报用。
+    # tag_detect 全屏扫描上限;其它注册类模式上限见模块级 MAX_REG_SLOTS。
     MAX_ID_SLOTS = 25
 
     # ── 主机→摄像头 脚本切换命令帧 ──
@@ -216,8 +235,13 @@ class HostAPI:
         if slots is not None:
             n = min(len(slots), self.MAX_ID_SLOTS)
         for i in range(n):
+            item = slots[i]
+            if item is None:
+                # 防御:直调时未填充槽位跳过(统一动态协议只发命中的组,
+                # 由 tick/order_slots 过滤;此处兜底防 None 解包整帧 abort)
+                continue
             off = i * 10
-            fid, x, y, w, h, conf = slots[i]
+            fid, x, y, w, h, conf = item
             buf[off]     = fid & 0xFF
             buf[off + 1] = (x >> 8) & 0xFF  # 大端:高字节在前
             buf[off + 2] = x & 0xFF
@@ -232,11 +256,13 @@ class HostAPI:
         self.send_frame(msg_type, buf, length=n * 10)
 
     def tick(self, category_id, slots=None):
-        """每帧调：握手轮询 + 按 category 推送4组数据。
+        """每帧调：握手轮询 + 按 category 推送数据。
 
-        Args:
-            category_id: reset 框架 category（"main_menu"/"camera"/...）
-            slots: list[4] 或 None。None → 4组全0（主菜单/相机/settings）。
+        统一动态 N 组协议:slots 非 None 时先过滤空槽 + 按 (x,y) 升序
+        (最左=目标1,与 tag_detect 一致) + 按模式上限截断
+        (tag_detect=25 / 其它注册类=4),只发命中的 N 组(N×10B);
+        slots=None → 0 字节载荷(主菜单/相机/无目标场景)。
+        主机须按帧 length 字段解析 N 组,不得假设固定组数。
         """
         self.poll_handshake()
         # 握手应答后 100ms 静默期:不足 100ms 跳过数据帧发送(用户确认)。
@@ -245,6 +271,9 @@ class HostAPI:
             if _time.ticks_diff(_time.ticks_ms(), self._last_handshake_ms) < self.HANDSHAKE_COOLDOWN_MS:
                 return
         msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
+        if slots is not None:
+            max_slots = self.MAX_ID_SLOTS if category_id == "tag_detect" else MAX_REG_SLOTS
+            slots = order_slots(slots, max_slots)
         self._diag_tick_count += 1
         if category_id != self._diag_last_category or msg_type != self._diag_last_msg_type \
                 or self._diag_tick_count % 30 == 0:

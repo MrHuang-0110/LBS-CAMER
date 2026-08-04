@@ -34,6 +34,9 @@ BOX_COLORS = {
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
 BOX_LOCK = 0xFFD700      # 锁定高亮黄框
+# 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+run),其余帧用缓存
+# det_boxes/features/disp_boxes 画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
+DET_INTERVAL = 2
 
 
 def _draw_color(hex_color):
@@ -59,6 +62,11 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
+_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
+_last_det = ([], [])      # 上轮 (det_boxes, features) 缓存
+_last_disp = []           # 上轮 disp_boxes 缓存(非检测帧画框/触摸用)
+_last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
+_pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 
 
 def _init_ai():
@@ -106,30 +114,37 @@ def _deinit_ai():
 def on_frame(img):
     """chn2 检测+提特征 → 锁定跟踪或余弦匹配 → 画框 + ID 标签 → host_tick。
 
-    锁定时:在检测特征里找与 _locked_feature 余弦最相似的(≥0.75),只画该框(黄+十字+
+    锁定时:在检测特征里找与 _locked_feature 余弦最相似的(≥0.82),只画该框(黄+十字+
     LOCK);低于阈值 → 锁定丢失,自动解锁。未锁定:每框 database_search,命中槽画彩框+
     ID#,未命中白框。触摸点击命中框 → 锁定该框特征;点空白 → 解锁。K2 注册当前锁定特征。
     """
-    global _locked_feature, _pending_click
+    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots
     if _RUNTIME is None or _ocr is None:
         return
-    img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-    img_np = img_ai.to_numpy_ref()
-    try:
-        det_boxes, features = _ocr.run(img_np)
-    except Exception as e:
-        print("[object_classify] run error: %s" % e)
-        det_boxes, features = [], []
-
-    # 检测框(rgb888p) → 显示坐标(VGA)
-    disp_boxes = []
-    for d in det_boxes:
-        l, t, r, b = int(d[0]), int(d[1]), int(d[2]), int(d[3])
-        x = l * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-        y = t * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-        w = (r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-        h = (b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-        disp_boxes.append((x, y, w, h))
+    det_boxes, features = _last_det
+    disp_boxes = _last_disp
+    _det_counter += 1
+    do_det = (_det_counter % DET_INTERVAL == 0)
+    if do_det:
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        img_np = img_ai.to_numpy_ref()
+        try:
+            det_boxes, features = _ocr.run(img_np)
+        except Exception as e:
+            print("[object_classify] run error: %s" % e)
+            det_boxes, features = [], []
+        _last_det = (det_boxes, features)
+        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
+        # 检测框(rgb888p) → 显示坐标(VGA)
+        disp_boxes = []
+        for d in det_boxes:
+            l, t, r, b = int(d[0]), int(d[1]), int(d[2]), int(d[3])
+            x = l * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+            y = t * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+            w = (r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+            h = (b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+            disp_boxes.append((x, y, w, h))
+        _last_disp = disp_boxes
 
     slots = [None, None, None, None]
     filled = set()
@@ -203,6 +218,11 @@ def on_frame(img):
         except Exception as e:
             print("[object_classify] register error: %s" % e)
 
+    # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
+    if not do_det and _last_slots is not None:
+        slots = _last_slots
+    else:
+        _last_slots = slots
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
 
@@ -283,11 +303,12 @@ def _on_overlay_clicked(e):
 
 
 def _on_clear_clicked(e):
-    global _close_overlay
+    global _close_overlay, _pending_clear_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     object_classify_db.clear()
     _db_features.clear()
+    _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -467,7 +488,7 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME
+    global _RUNTIME, _pending_clear_flush
     _RUNTIME = runtime
     exit_flag = [False]
     _init_ai()
@@ -489,6 +510,9 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
+            if _pending_clear_flush:
+                _pending_clear_flush = False
+                object_classify_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
             time.sleep_ms(lv.task_handler())

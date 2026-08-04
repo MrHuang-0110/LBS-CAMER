@@ -13,10 +13,12 @@ from core import db_store
 
 BODY_DB_PATH = "/sdcard/CamerAi/data/body_db.json"
 
-# 默认匹配阈值(score=cos/2+0.5 映射后)。0.75 ⇒ cos≥0.5,对齐 face_db。
+# 默认匹配阈值(score=cos/2+0.5 映射后)。0.82 ⇒ cos≥0.64,对齐 face_db 修复。
 # ⚠️ 勿用 0.5:0.5 ⇒ cos≥0,CNN 自然图像特征几乎总正相关 → 所有人都命中同一 ID。
-# 板端按 recognition.kmodel 对人体的实际区分力调(诊断见 app.py _DEBUG_DIAG)。
-BODY_MATCH_THRESHOLD = 0.75
+# 旧 0.75(cos≥0.5)对不同人过松 → 换人误识别(同 face_detect 修复前)。
+BODY_MATCH_THRESHOLD = 0.82
+# 多人注册时 best 与 second 的最小分数差。差更小 → 特征不可区分,判不确定。
+BODY_MATCH_MARGIN = 0.06
 
 
 def _to_list(feat):
@@ -49,6 +51,7 @@ def database_search(feature, db_features, threshold=BODY_MATCH_THRESHOLD):
         return None, 0.0
     best_id = None
     best_score = 0.0
+    second_score = 0.0
     for slot_id, db_feat in db_features.items():
         try:
             db_list = _to_list(db_feat)
@@ -60,9 +63,15 @@ def database_search(feature, db_features, threshold=BODY_MATCH_THRESHOLD):
         dot = sum(a * b for a, b in zip(feat_list, db_list))
         score = (dot / (feat_norm * db_n)) / 2 + 0.5
         if score > best_score:
+            second_score = best_score
             best_score = score
             best_id = slot_id
+        elif score > second_score:
+            second_score = score
     if best_score < threshold:
+        return None, 0.0
+    # 次佳区分:注册多人且 best/second 差距过小 → 特征不可区分,拒绝
+    if len(db_features) >= 2 and (best_score - second_score) < BODY_MATCH_MARGIN:
         return None, 0.0
     return best_id, best_score
 

@@ -130,6 +130,7 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
+_pending_clear_flush = False  # 清除写盘请求:主循环安全窗口 flush(防断电重启旧数据回魂)
 
 
 def _init_registry(fpioa):
@@ -322,10 +323,11 @@ def _on_overlay_clicked(e):
 
 
 def _on_clear_clicked(e):
-    global _close_overlay
+    global _close_overlay, _pending_clear_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     _color_db.clear()
+    _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -680,7 +682,6 @@ def on_frame(img):
             registrar=lambda th: _color_db.register(th, rgb=latest_rgb))
         if slot is not None:
             _color_db.flush_to_disk(_COLOR_DB_PATH)  # 注册即写（on_frame 内，task_handler 前）
-        if slot is not None:
             _refresh_count()
             print("[color_detect] registered -> ID%d (lab=%r)" % (slot, lab_mid))
         else:
@@ -725,7 +726,7 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _color_db
+    global _RUNTIME, _color_db, _pending_clear_flush
     _RUNTIME = runtime
     _color_db = ColorDB()
     _color_db.load_from_disk(_COLOR_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
@@ -749,6 +750,10 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
+            if _pending_clear_flush:
+                _pending_clear_flush = False
+                if _color_db is not None:
+                    _color_db.flush_to_disk(_COLOR_DB_PATH)  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
