@@ -32,6 +32,7 @@ REG_INTERVAL_1 = 2   # 1 人:每 2 帧识别一轮
 REG_INTERVAL_2 = 4   # 2~3 人:每 4 帧识别一轮
 REG_INTERVAL_3 = 6   # ≥4 人:每 6 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
+TRACK_RADIUS = 80    # 非识别帧 ID 关联半径(chn2 1024x768 像素;人脸帧间位移 <80 正常)
 
 _RUNTIME = None
 _screen = None
@@ -52,7 +53,7 @@ _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据�
 _det_counter = 0     # 检测跳帧计数(每 DET_IDLE_INTERVAL 帧检测一次)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
-_last_rec = []              # 上轮识别结果缓存[(det_idx, mid), ...]:识别帧刷新、非识别帧复用,防白框闪烁
+_last_track = []        # 识别帧目标缓存[(cx, cy, mid), ...]:非识别帧最近邻关联画 ID 框
 
 
 
@@ -124,6 +125,39 @@ def _deinit_ai():
         _face_reg = None
 
 
+def _box_center(det):
+    """检测框中心 (cx, cy)（chn2 坐标，未缩放）。"""
+    return det[0] + det[2] // 2, det[1] + det[3] // 2
+
+
+def _associate_to_tracked(det_boxes, tracked, radius):
+    """非识别帧:按中心最近邻把缓存跟踪目标关联到新框,返回 [(det_idx, mid), ...]。
+
+    防窜脸:最近邻 + 半径阈值,新脸无近邻不画 ID,位置微动 ID 稳定;
+    一个跟踪目标只关联一个框(已占用跳过)。radius 语义=半径内严格更近才匹配。
+    """
+    results = []
+    if not det_boxes or not tracked:
+        return results
+    taken = set()
+    radius2 = radius * radius
+    for i, det in enumerate(det_boxes):
+        cx, cy = _box_center(det)
+        best_t = None
+        best_d2 = radius2
+        for t, (tx, ty, mid) in enumerate(tracked):
+            if t in taken:
+                continue
+            d2 = (tx - cx) * (tx - cx) + (ty - cy) * (ty - cy)
+            if d2 < best_d2:
+                best_d2 = d2
+                best_t = t
+        if best_t is not None:
+            taken.add(best_t)
+            results.append((i, tracked[best_t][2]))
+    return results
+
+
 def on_frame(img):
     """Detect on chn2, recognize ALL faces, draw onto chn0 preview, push 4 slots.
 
@@ -133,7 +167,7 @@ def on_frame(img):
     """
     if _RUNTIME is None or _face_det is None:
         return
-    global _reg_counter, _last_slots, _det_counter, _last_det, _last_rec
+    global _reg_counter, _last_slots, _det_counter, _last_det, _last_track
     det_boxes, landms = _last_det
     recognition_results = []
     slots = [None, None, None, None]
@@ -164,6 +198,9 @@ def on_frame(img):
         do_reg = _reg_counter == 0 or k2_pending
         _reg_counter = (_reg_counter + 1) % reg_interval
         if det_boxes and landms and _face_reg is not None and do_reg:
+            # 识别帧:重建跟踪目标缓存 + 帧内 ID 去重(一个 ID 只标一个框)
+            _last_track = []
+            used_mid = set()
             # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
             for i in range(min(len(det_boxes), REG_MAX_FACES)):
                 try:
@@ -171,17 +208,21 @@ def on_frame(img):
                     feature = _face_reg.run(img_np)
                     gc.collect()  # 每张脸推理后立即回收(坑#16:多人/运动时防帧内原生缓冲峰值叠加致 kpu.run 永久阻塞)
                     mid, score = database_search(feature, _db_features)
-                    if mid is not None:
-                        recognition_results.append((i, mid))
-                        det = det_boxes[i]
-                        x, y, w, h = det[:4]
-                        x = int(x * disp_w // rgb_w)
-                        y = int(y * disp_h // rgb_h)
-                        w = int(w * disp_w // rgb_w)
-                        h = int(h * disp_h // rgb_h)
-                        conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
-                        if 1 <= mid <= 4:
-                            slots[mid - 1] = (mid, x, y, w, h, conf)
+                    if mid is None or mid in used_mid:
+                        continue  # 无匹配或帧内已用 ID:跳过(防两张脸同标一个 ID)
+                    used_mid.add(mid)
+                    recognition_results.append((i, mid))
+                    det = det_boxes[i]
+                    x, y, w, h = det[:4]
+                    x = int(x * disp_w // rgb_w)
+                    y = int(y * disp_h // rgb_h)
+                    w = int(w * disp_w // rgb_w)
+                    h = int(h * disp_h // rgb_h)
+                    conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
+                    if 1 <= mid <= 4:
+                        slots[mid - 1] = (mid, x, y, w, h, conf)
+                    cx, cy = _box_center(det)
+                    _last_track.append((cx, cy, mid))
                 except Exception as e:
                     print("[face_detect] recog error: %s" % e)
             # K2 注册：注册当前帧最大脸（注册语义不变）
@@ -205,18 +246,19 @@ def on_frame(img):
                             face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
                             _db_features[slot] = feature
                             recognition_results.append((max_i, slot))
+                            cx, cy = _box_center(max_det)
+                            _last_track.append((cx, cy, slot))
                             if 1 <= slot <= 4:
                                 slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
                             _refresh_count()
                     except Exception as e:
                         print("[face_detect] register error: %s" % e)
-            # 识别帧结束:本帧识别结果写入缓存,供非识别帧复用画 ID 框
-            _last_rec = recognition_results
     else:
         do_reg = False
-    # 非识别帧:复用缓存识别结果(框为缓存/新框,ID 稳定不闪;下一识别帧纠正)
+    # 非识别帧:按中心最近邻把缓存 ID 关联到新框(防旧结果贴错新框窜脸;
+    # 新脸无近邻不画 ID, 位置微动 ID 稳定)
     if not do_reg:
-        recognition_results = _last_rec
+        recognition_results = _associate_to_tracked(det_boxes, _last_track, TRACK_RADIUS)
     # 非识别帧:复用缓存槽位,保持主机数据连续(坐标滞后≤1轮识别,可接受)
     if not do_reg and _last_slots is not None:
         slots = _last_slots
