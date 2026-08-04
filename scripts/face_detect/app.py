@@ -132,6 +132,8 @@ def on_frame(img):
         return
     global _reg_counter, _last_slots, _det_counter, _last_det
     det_boxes, landms = _last_det
+    recognition_results = []
+    slots = [None, None, None, None]
     # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测(框滞后≤1帧)
     _det_counter += 1
     do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
@@ -144,68 +146,66 @@ def on_frame(img):
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
         gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
-
-    recognition_results = []
-    slots = [None, None, None, None]
-    global _reg_counter, _last_slots
-    n_faces = len(det_boxes) if det_boxes else 0
-    k2_pending = _id_registry is not None and _id_registry.has_pending()
-    # 识别降频:1人每2帧/2~3人每4帧/≥4人每6帧;K2 注册强制本轮识别。
-    # 非识别帧复用 _last_slots,主机数据连续,ID 更新延迟 ≤200ms。
-    interval = REG_INTERVAL_1
-    if n_faces >= 4:
-        interval = REG_INTERVAL_3
-    elif n_faces >= 2:
-        interval = REG_INTERVAL_2
-    do_reg = _reg_counter == 0 or k2_pending
-    _reg_counter = (_reg_counter + 1) % interval
-    if det_boxes and landms and _face_reg is not None and do_reg:
-        # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
-        for i in range(min(len(det_boxes), REG_MAX_FACES)):
-            try:
-                _face_reg.config_preprocess(landms[i])
-                feature = _face_reg.run(img_np)
-                gc.collect()  # 每张脸推理后立即回收(坑#16:多人/运动时防帧内原生缓冲峰值叠加致 kpu.run 永久阻塞)
-                mid, score = database_search(feature, _db_features)
-                if mid is not None:
-                    recognition_results.append((i, mid))
-                    det = det_boxes[i]
-                    x, y, w, h = det[:4]
-                    x = int(x * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-                    y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-                    w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-                    h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-                    conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
-                    if 1 <= mid <= 4:
-                        slots[mid - 1] = (mid, x, y, w, h, conf)
-            except Exception as e:
-                print("[face_detect] recog error: %s" % e)
-        # K2 注册：注册当前帧最大脸（注册语义不变）
-        if k2_pending:
-            max_i = max(range(len(det_boxes)),
-                        key=lambda j: det_boxes[j][2] * det_boxes[j][3])
-            det = det_boxes[max_i]
-            w_vga = int(det[2] * _face_det.display_size[0] // _face_det.rgb888p_size[0])
-            h_vga = int(det[3] * _face_det.display_size[1] // _face_det.rgb888p_size[1])
-            if w_vga * h_vga < MIN_REG_AREA:
-                # 脸太小,特征质量差:拒绝注册(长音提示失败)
-                if _RUNTIME is not None and _RUNTIME.buzzer is not None:
-                    _RUNTIME.buzzer.beep(ms=300)
-            else:
+        # 识别判定仅在检测帧(有新鲜 det 结果与 img_np):按人数降频,K2 注册强制。
+        # ⚠️ 不可放检测块外:do_reg 若落在非检测帧,img_np 未定义 → NameError
+        n_faces = len(det_boxes) if det_boxes else 0
+        k2_pending = _id_registry is not None and _id_registry.has_pending()
+        interval = REG_INTERVAL_1
+        if n_faces >= 4:
+            interval = REG_INTERVAL_3
+        elif n_faces >= 2:
+            interval = REG_INTERVAL_2
+        do_reg = _reg_counter == 0 or k2_pending
+        _reg_counter = (_reg_counter + 1) % interval
+        if det_boxes and landms and _face_reg is not None and do_reg:
+            # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
+            for i in range(min(len(det_boxes), REG_MAX_FACES)):
                 try:
-                    _face_reg.config_preprocess(landms[max_i])
+                    _face_reg.config_preprocess(landms[i])
                     feature = _face_reg.run(img_np)
-                    gc.collect()  # 注册推理后立即回收(坑#16,与识别循环同策略)
-                    slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
-                    if slot is not None:
-                        face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
-                        _db_features[slot] = feature
-                        recognition_results.append((max_i, slot))
-                        if 1 <= slot <= 4:
-                            slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
-                        _refresh_count()
+                    gc.collect()  # 每张脸推理后立即回收(坑#16:多人/运动时防帧内原生缓冲峰值叠加致 kpu.run 永久阻塞)
+                    mid, score = database_search(feature, _db_features)
+                    if mid is not None:
+                        recognition_results.append((i, mid))
+                        det = det_boxes[i]
+                        x, y, w, h = det[:4]
+                        x = int(x * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+                        y = int(y * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                        w = int(w * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+                        h = int(h * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                        conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
+                        if 1 <= mid <= 4:
+                            slots[mid - 1] = (mid, x, y, w, h, conf)
                 except Exception as e:
-                    print("[face_detect] register error: %s" % e)
+                    print("[face_detect] recog error: %s" % e)
+            # K2 注册：注册当前帧最大脸（注册语义不变）
+            if k2_pending:
+                max_i = max(range(len(det_boxes)),
+                            key=lambda j: det_boxes[j][2] * det_boxes[j][3])
+                det = det_boxes[max_i]
+                w_vga = int(det[2] * _face_det.display_size[0] // _face_det.rgb888p_size[0])
+                h_vga = int(det[3] * _face_det.display_size[1] // _face_det.rgb888p_size[1])
+                if w_vga * h_vga < MIN_REG_AREA:
+                    # 脸太小,特征质量差:拒绝注册(长音提示失败)
+                    if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+                        _RUNTIME.buzzer.beep(ms=300)
+                else:
+                    try:
+                        _face_reg.config_preprocess(landms[max_i])
+                        feature = _face_reg.run(img_np)
+                        gc.collect()  # 注册推理后立即回收(坑#16,与识别循环同策略)
+                        slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
+                        if slot is not None:
+                            face_db.flush_to_disk()  # 注册即写（on_frame 内，task_handler 前，坑#2 安全窗口）
+                            _db_features[slot] = feature
+                            recognition_results.append((max_i, slot))
+                            if 1 <= slot <= 4:
+                                slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
+                            _refresh_count()
+                    except Exception as e:
+                        print("[face_detect] register error: %s" % e)
+    else:
+        do_reg = False
     # 非识别帧:复用上轮槽位,保持主机数据连续(坐标滞后≤interval 帧,可接受)
     if not do_reg and _last_slots is not None:
         slots = _last_slots
