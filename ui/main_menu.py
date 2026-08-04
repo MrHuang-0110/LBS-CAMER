@@ -47,8 +47,8 @@ ICON_ZOOM_MIN = 48               # 图标最小缩放
 OPA_NORMAL = 153    # 60% of 255
 OPA_SELECTED = 255   # 100%
 
-SCROLL_SNAP_TIME = 250  # 吸附动画时长 (ms)
-SCROLL_SNAP_DELAY = 150  # 触摸释放后延迟开始吸附 (ms)
+SCROLL_SNAP_TIME = 160  # 吸附动画时长 (ms)
+SCROLL_SNAP_DELAY = 90  # 触摸释放后延迟开始吸附 (ms)
 GEOM_ANIM_TIME = 280     # 卡片宽窄/位置过渡动画时长(ms),ease_out 顺滑
 
 # Board diagnostic: prints once per second while menu is alive. Keep False for normal builds.
@@ -165,6 +165,11 @@ class MainMenu:
         self._scroll.add_flag(lv.obj.FLAG.SCROLLABLE)
         self._scroll.set_scroll_dir(lv.DIR.VER)
         self._scroll.set_scrollbar_mode(lv.SCROLLBAR_MODE.OFF)
+        # 吸附动画时长:LVGL 默认约 200ms 偏慢,显式应用 SCROLL_SNAP_TIME
+        try:
+            self._scroll.set_anim_time(SCROLL_SNAP_TIME)
+        except Exception:
+            pass  # 绑定缺失时退回 LVGL 默认动画时长,不阻塞菜单
         print("[MainMenu] scroll area created")
 
         # ── 逐张创建卡片（图标已预读入 self._icon_cache，构建期零文件 I/O）──
