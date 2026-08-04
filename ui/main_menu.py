@@ -84,12 +84,12 @@ class MainMenu:
         self._spacer = None         # 底部撑开 spacer
         self._cards = []            # CardSlot 列表
         self._selected_index = -1
-        self._scroll_end_timer = None
-        self._is_scrolling = False
         self._icon_cache = {}       # {cat_id: bytes} 预读图标,常驻内存
         self._bg_style = None       # lv.style_t 必须保活，GC 后 C 侧仍引用
         self._scroll_cb = None      # LVGL 事件回调必须保活，防 GC 后 C 侧悬空
         self._scroll_end_cb = None
+        self._scroll_press_cb = None
+        self._snap_pending_at = 0   # 延迟吸附到期时刻(ticks_ms),0=无待执行吸附
         self._diag_last_ms = 0
         self._diag_seq = 0
 
@@ -248,8 +248,10 @@ class MainMenu:
         print("[MainMenu] setting up scroll events...")
         self._scroll_cb = self._on_scroll
         self._scroll_end_cb = self._on_scroll_end
+        self._scroll_press_cb = self._on_pressed
         self._scroll.add_event(self._scroll_cb, lv.EVENT.SCROLL, None)
         self._scroll.add_event(self._scroll_end_cb, lv.EVENT.SCROLL_END, None)
+        self._scroll.add_event(self._scroll_press_cb, lv.EVENT.PRESSED, None)
 
         # 初始选中第一张并吸附居中（_scroll_to 内部会调用 _update_selection）
         print("[MainMenu] initial scroll_to(0)...")
@@ -275,17 +277,50 @@ class MainMenu:
     # ── 滚动回调 ──────────────────────────────────────
 
     def _on_scroll(self, event):
-        """滚动中：按卡片距视口中心的距离更新视觉，不创建 Python 动画。"""
-        self._is_scrolling = True
+        """滚动中：按卡片距视口中心的距离更新视觉，不创建 Python 动画。
+
+        滚动中清除待执行吸附：_cancel_scroll_anim 终止动画会再触发
+        SCROLL_END 重设 pending,此处清掉避免拖动中被 tick 抢走吸附。
+        """
+        self._snap_pending_at = 0
         self._apply_scroll_visuals(update_selection=True)
         self._diag_mem_tick("scroll")
 
     def _on_scroll_end(self, event):
-        """滚动结束 → 吸附到最近卡片；视觉仍由距离驱动。"""
-        self._is_scrolling = False
-        self._snap_to_nearest()
+        """滚动结束 → 延迟吸附；视觉仍由距离驱动。
+
+        连续滑动时若松手立即吸附,动画会与下一次手指拖动竞争
+        (SCROLL 事件高频触发拖慢 task_handler → 不跟手)。改为延迟
+        SCROLL_SNAP_DELAY 后由主循环 tick() 执行吸附,期间手指再次
+        按下/滚动会取消 pending,手势完全接管。
+        """
+        self._schedule_snap()
         self._apply_scroll_visuals(update_selection=True)
         self._diag_mem_tick("scroll_end")
+
+    def _schedule_snap(self):
+        """调度延迟吸附:记录到期时刻,由主循环 menu.tick() 驱动执行。"""
+        self._snap_pending_at = time.ticks_ms() + SCROLL_SNAP_DELAY
+
+    def tick(self):
+        """主循环驱动:延迟吸附到期检查。须在 lv.task_handler() 后调用。"""
+        if self._snap_pending_at == 0 or not self._cards:
+            return
+        if time.ticks_diff(time.ticks_ms(), self._snap_pending_at) >= 0:
+            self._snap_pending_at = 0
+            self._snap_to_nearest()
+
+    def _on_pressed(self, event):
+        """手指按下:取消待执行吸附 + 停止进行中的吸附动画,手势完全接管。"""
+        self._snap_pending_at = 0
+        self._cancel_scroll_anim()
+
+    def _cancel_scroll_anim(self):
+        """停止 LVGL 正在运行的 scroll 动画(ANIM.OFF 落位到当前值即终止)。"""
+        try:
+            self._scroll.scroll_to_y(self._scroll.get_scroll_y(), lv.ANIM.OFF)
+        except Exception:
+            pass
 
     # ── 吸附逻辑 ──────────────────────────────────────
 
@@ -394,8 +429,14 @@ class MainMenu:
             return
         card = self._cards[idx]
         target_scroll_y = card.y - (self._scroll.get_height() - CARD_H) // 2
-        anim = lv.ANIM.ON if animate else lv.ANIM.OFF
-        self._scroll.scroll_to_y(max(0, target_scroll_y), anim)
+        target_scroll_y = max(0, target_scroll_y)
+        cur_y = self._scroll.get_scroll_y()
+        # 距离过近直接落位:避免 0 位移动画 + 避免连续吸附抖动
+        if abs(target_scroll_y - cur_y) <= 2:
+            anim = lv.ANIM.OFF
+        else:
+            anim = lv.ANIM.ON if animate else lv.ANIM.OFF
+        self._scroll.scroll_to_y(target_scroll_y, anim)
         self._selected_index = idx
         self._apply_scroll_visuals(update_selection=False)
 

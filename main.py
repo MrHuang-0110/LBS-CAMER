@@ -166,6 +166,7 @@ def run_menu():
             os.exitpoint()
             _th = lv.task_handler()
             menu.diag_after_task_handler()
+            menu.tick()  # 延迟吸附到期检查(连续滑动时手势优先,松手后才吸附)
             runtime.host_tick()
             time.sleep_ms(_th if _th > 0 else 5)
         except Exception as e:
