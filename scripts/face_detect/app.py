@@ -52,6 +52,7 @@ _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据�
 _det_counter = 0     # 检测跳帧计数(每 DET_IDLE_INTERVAL 帧检测一次)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
+_last_rec = []              # 上轮识别结果缓存[(det_idx, mid), ...]:识别帧刷新、非识别帧复用,防白框闪烁
 
 
 
@@ -132,7 +133,7 @@ def on_frame(img):
     """
     if _RUNTIME is None or _face_det is None:
         return
-    global _reg_counter, _last_slots, _det_counter, _last_det
+    global _reg_counter, _last_slots, _det_counter, _last_det, _last_rec
     det_boxes, landms = _last_det
     recognition_results = []
     slots = [None, None, None, None]
@@ -209,9 +210,14 @@ def on_frame(img):
                             _refresh_count()
                     except Exception as e:
                         print("[face_detect] register error: %s" % e)
+            # 识别帧结束:本帧识别结果写入缓存,供非识别帧复用画 ID 框
+            _last_rec = recognition_results
     else:
         do_reg = False
-    # 非识别帧:复用上轮槽位,保持主机数据连续(坐标滞后≤interval 帧,可接受)
+    # 非识别帧:复用缓存识别结果(框为缓存/新框,ID 稳定不闪;下一识别帧纠正)
+    if not do_reg:
+        recognition_results = _last_rec
+    # 非识别帧:复用缓存槽位,保持主机数据连续(坐标滞后≤1轮识别,可接受)
     if not do_reg and _last_slots is not None:
         slots = _last_slots
     else:
