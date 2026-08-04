@@ -148,7 +148,7 @@ class _FaceDB:
 
     def flush_to_disk(self, path=FACE_DB_PATH):
         """写盘。注册即写（on_frame 内 task_handler 前，坑#2 安全窗口），
-        也作退出兜底。open('w') 不抛 ENOENT。"""
+        也作退出兜底。'w' 模式写不存在文件不抛 ENOENT。"""
         db_store.save_json(path, self._serialize())
         self._dirty = False
         self._clear_dirty = False
