@@ -726,7 +726,7 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _color_db
+    global _RUNTIME, _color_db, _pending_clear_flush
     _RUNTIME = runtime
     _color_db = ColorDB()
     _color_db.load_from_disk(_COLOR_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
