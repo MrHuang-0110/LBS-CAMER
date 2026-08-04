@@ -21,13 +21,14 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
-# 无人脸时检测降频:静止画面结果不变,减少 NPU 原生缓冲分配频率(坑#16 类累积缓解)
+# 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测一次(框滞后≤1帧),降 NPU+GC 负载提帧率
 DET_IDLE_INTERVAL = 2
-# 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
+# 识别降频(帧率优先):1人每2帧/2~3人每4帧/≥4人每6帧识别一轮。
+# 非识别帧复用上轮结果,ID 框延迟≤200ms;每帧 NPU+GC 工作量大幅下降
 REG_MAX_FACES = 4
-REG_INTERVAL_2 = 2   # 2~3 人:每 2 帧识别一轮(检测仍每帧跑)
-REG_INTERVAL_3 = 4   # ≥4 人:每 4 帧识别一轮(多人每帧 4 次 reg + ~10 次 gc.collect
-                     # 全堆扫描开销大,降频压平均负载;识别延迟 ~130ms 可接受)
+REG_INTERVAL_1 = 2
+REG_INTERVAL_2 = 4
+REG_INTERVAL_3 = 6
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 
 _RUNTIME = None
@@ -46,8 +47,9 @@ _save_btn = None
 _close_overlay = False
 _reg_counter = 0     # 多人跳帧计数(每 interval 帧识别一轮)
 _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
-_det_counter = 0     # 无人脸时检测跳帧计数
+_det_counter = 0     # 检测跳帧计数
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
+_pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
 
 
 
@@ -130,13 +132,9 @@ def on_frame(img):
         return
     global _reg_counter, _last_slots, _det_counter, _last_det
     det_boxes, landms = _last_det
-    # 无人脸时检测跳帧(有脸每帧保实时,无脸每 2 帧一次)
-    if det_boxes:
-        _det_counter = 0
-        do_det = True
-    else:
-        _det_counter += 1
-        do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
+    # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测(框滞后≤1帧)
+    _det_counter += 1
+    do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
     if do_det:
         # 检测帧才取 chn2 帧:非检测帧跳过 chn2 大分辨率(1024x768) DMA 取流,
         # 减半其与显示 DMA(OSD1+OSD2 flush)的竞争——第一轮插桩证据:
@@ -152,14 +150,14 @@ def on_frame(img):
     global _reg_counter, _last_slots
     n_faces = len(det_boxes) if det_boxes else 0
     k2_pending = _id_registry is not None and _id_registry.has_pending()
-    # 多人跳帧:检测每帧跑,reg 按人数降频(1人每帧/2~3人隔帧/≥4人隔两帧)。
-    # 按 K2 注册时强制本轮识别(注册优先)。
-    interval = 1
+    # 识别降频:1人每2帧/2~3人每4帧/≥4人每6帧;K2 注册强制本轮识别。
+    # 非识别帧复用 _last_slots,主机数据连续,ID 更新延迟 ≤200ms。
+    interval = REG_INTERVAL_1
     if n_faces >= 4:
         interval = REG_INTERVAL_3
     elif n_faces >= 2:
         interval = REG_INTERVAL_2
-    do_reg = interval == 1 or _reg_counter == 0 or k2_pending
+    do_reg = _reg_counter == 0 or k2_pending
     _reg_counter = (_reg_counter + 1) % interval
     if det_boxes and landms and _face_reg is not None and do_reg:
         # 识别前 REG_MAX_FACES 张(超出只画框,防极端多人卡死)
@@ -288,12 +286,13 @@ def _on_screen_clicked(e):
 
 
 def _on_clear_clicked(e):
-    """清除内存特征 + 标志关闭浮层。不删盘（持久化待定）。"""
-    global _close_overlay
+    """清除内存特征 + 置持久化标志(主循环安全窗口写空库)。"""
+    global _close_overlay, _pending_clear_flush
     if e.get_code() != lv.EVENT.CLICKED:
         return
     face_db.clear()
     _db_features.clear()
+    _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前执行(坑#2 安全窗口)
     _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
@@ -495,6 +494,9 @@ def run(runtime):
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
+            if _pending_clear_flush:
+                _pending_clear_flush = False
+                face_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口,防断电/异常退出后旧数据回魂)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 放在 show_image 之后、task_handler 之前，避免 AI 推理后立即 GC 阻塞 DMA
             time.sleep_ms(lv.task_handler())
