@@ -472,7 +472,7 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME
+    global _RUNTIME, _pending_clear_flush
     _RUNTIME = runtime
     exit_flag = [False]
     _init_ai()
