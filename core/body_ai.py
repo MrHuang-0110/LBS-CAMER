@@ -32,14 +32,8 @@ PERSON_ANCHORS = [10, 13, 16, 30, 33, 23, 30, 61, 62, 45,
 # 1 类标签(同 demo 实验5)
 PERSON_LABELS = ["person"]
 
-# 4 槽颜色(同 face_detect BOX_COLORS)
-BOX_COLORS = {
-    1: 0x44CC44,
-    2: 0x4488FF,
-    3: 0xFF8844,
-    4: 0xCC44FF,
-}
-BOX_UNKNOWN = 0xFFFFFF
+# 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
+from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 
 
 def ALIGN_UP(x, align=16):

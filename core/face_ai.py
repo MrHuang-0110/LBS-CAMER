@@ -17,13 +17,8 @@ from libs.Utils import letterbox_pad_param
 RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
-BOX_COLORS = {
-    1: 0x44CC44,
-    2: 0x4488FF,
-    3: 0xFF8844,
-    4: 0xCC44FF,
-}
-BOX_UNKNOWN = 0xFFFFFF
+# 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
+from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 
 
 def ALIGN_UP(x, align=16):

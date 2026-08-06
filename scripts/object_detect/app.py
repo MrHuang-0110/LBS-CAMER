@@ -23,14 +23,8 @@ PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 
-# 画框配色对齐 face_detect/tag_detect:未注册白框,注册按 slot 取彩色。
-BOX_COLORS = {
-    1: 0x44CC44,   # 绿
-    2: 0x4488FF,   # 蓝
-    3: 0xFF8844,   # 橙
-    4: 0xCC44FF,   # 紫
-}
-BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
+from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
 # 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+det),其余帧用缓存结果
