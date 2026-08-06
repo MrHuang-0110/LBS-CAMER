@@ -21,7 +21,9 @@ from libs.PipeLine import ScopedTiming
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 
 # AI 通道分辨率(对齐 body_detect/object_detect 的 chn2 XGA RGBP888)
-RGB888P_SIZE = [1024, 768]
+# AI 通道分辨率(chn2 VGA 640x480,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
+# 持续搬运与显示 DMA 竞争累积致几分钟死机;det 320 + rec 224 用 VGA 足够)
+RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 
 # kmodel 路径(匹配 demo 存放位置;同 object_ai / body_ai)

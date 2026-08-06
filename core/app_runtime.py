@@ -249,7 +249,8 @@ class AppRuntime:
         """按 category 决定 sensor 通道配置。"""
         chs = [(CAM_CHN_ID_0, Sensor.VGA, Sensor.RGB888)]
         if category_id == "face_detect":
-            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+            # chn2 VGA RGBP888 做 AI 推理(死机修复 2026-08-06:chn2 降 VGA 减 DMA,输入 320 够用)
+            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
         elif category_id == "camera":
             chs.append((CAM_CHN_ID_1, Sensor.SXGAM, Sensor.RGB565))
         elif category_id == "tag_detect":
@@ -257,9 +258,9 @@ class AppRuntime:
             # chn0 VGA RGB888 显示。rect ×2 映射显示（QVGA→VGA 整数缩放）。
             chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "object_detect":
-            # chn2 XGA RGBP888 专做 AI 推理(同 face_detect AI 通道)；
+            # chn2 VGA RGBP888 做 AI 推理(同 face_detect,死机修复降 VGA);
             # chn0 VGA RGB888 显示。检测框 rgb888p->display 整数缩放。
-            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
         elif category_id == "color_detect":
             # chn1 QVGA RGB565 专做 find_blobs 颜色检测(同 tag_detect)；
             # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示(QVGA→VGA)。
@@ -269,14 +270,14 @@ class AppRuntime:
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并恢复 chn1 QVGA RGB565 检测。
             pass
         elif category_id == "gesture_detect":
-            # chn2 XGA RGBP888 做 AI 推理(同 face_detect AI 通道)
-            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+            # chn2 SVGA RGBP888 做 AI 推理(死机修复降 SVGA 800x600,输入 512 够用)
+            chs.append((CAM_CHN_ID_2, Sensor.SVGA, Sensor.RGBP888))
         elif category_id == "body_detect":
-            # chn2 XGA RGBP888 做 AI 推理(同 face_detect/gesture_detect AI 通道)
+            # chn2 XGA RGBP888 保持(模型输入 640x640 需 >=640 高,降分辨率不可行)
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "object_classify":
-            # chn2 XGA RGBP888 做 AI 推理(同 body_detect:YOLOv8n 检测 + recognition 特征)
-            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+            # chn2 VGA RGBP888 做 AI 推理(死机修复降 VGA,输入 320/224 够用)
+            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
         elif category_id == "image_classify":
             # 暂时单通道 chn0 VGA RGB888 预览(不跑AI)。
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并在此附加 chn2 AI 通道。

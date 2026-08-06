@@ -33,8 +33,8 @@ DET_INTERVAL = 2
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
-RGB888P_W = 1024
-RGB888P_H = 768
+RGB888P_W = 640
+RGB888P_H = 480
 DISPLAY_W = 640
 DISPLAY_H = 480
 

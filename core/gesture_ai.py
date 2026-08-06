@@ -16,7 +16,10 @@ from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
 # AI 通道分辨率(对齐 face_detect 的 chn2 XGA RGBP888)
-RGB888P_SIZE = [1024, 768]
+# AI 通道分辨率(chn2 SVGA 800x600,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
+# 持续搬运与显示 DMA 竞争累积致几分钟死机;手部检测输入 512x512,800x600 高度足够,
+# DMA 比 XGA 少约 36%)
+RGB888P_SIZE = [800, 600]
 DISPLAY_SIZE = [640, 480]
 
 # kmodel 路径(匹配 demo 实验9 的存放位置)

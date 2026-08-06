@@ -18,7 +18,9 @@ from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
-RGB888P_SIZE = [1024, 768]
+# AI 通道分辨率(chn2 VGA 640x480,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
+# 持续搬运与显示 DMA 竞争累积致几分钟死机;det 输入 320x320 用 VGA 足够)
+RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 
 # COCO 80 类英文标签(从 demo 实验15 拷贝)

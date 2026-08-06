@@ -17,7 +17,8 @@ from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
-# AI 通道分辨率(对齐 face_detect 的 chn2 XGA RGBP888)
+# AI 通道分辨率(保持 XGA 1024x768:person_detect 模型输入 640x640 需 >=640 高度源,
+# 降分辨率不可行——2026-08-06 死机修复(chn2 降 DMA)未覆盖 body,板端需单独验证)
 RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
