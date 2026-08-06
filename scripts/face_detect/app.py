@@ -33,6 +33,8 @@ REG_INTERVAL_2 = 4   # 2~3 人:每 4 帧识别一轮
 REG_INTERVAL_3 = 6   # ≥4 人:每 6 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 TRACK_RADIUS = 80    # 非识别帧 ID 关联半径(chn2 1024x768 像素;人脸帧间位移 <80 正常)
+# conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
+LEARNED_FLAG = 0x80
 
 _RUNTIME = None
 _screen = None
@@ -42,7 +44,6 @@ _preview = None
 _face_det = None
 _face_reg = None
 _db_features = {}
-_count_label = None
 _id_registry = None
 _overlay = None
 _clear_btn = None
@@ -170,7 +171,7 @@ def on_frame(img):
     global _reg_counter, _last_slots, _det_counter, _last_det, _last_track
     det_boxes, landms = _last_det
     recognition_results = []
-    slots = [None, None, None, None]
+    slots = []  # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测(框滞后≤1帧)
     _det_counter += 1
     do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
@@ -219,8 +220,8 @@ def on_frame(img):
                     w = int(w * disp_w // rgb_w)
                     h = int(h * disp_h // rgb_h)
                     conf = int(score * 100)  # 置信度=识别匹配度(0-100),非检测框分数
-                    if 1 <= mid <= 4:
-                        slots[mid - 1] = (mid, x, y, w, h, conf)
+                    if 1 <= mid <= 25:
+                        slots.append((mid, x, y, w, h, conf | LEARNED_FLAG))  # 已学习:bit7=1
                     cx, cy = _box_center(det)
                     _last_track.append((cx, cy, mid))
                 except Exception as e:
@@ -248,11 +249,22 @@ def on_frame(img):
                             recognition_results.append((max_i, slot))
                             cx, cy = _box_center(max_det)
                             _last_track.append((cx, cy, slot))
-                            if 1 <= slot <= 4:
-                                slots[slot - 1] = (slot, 0, 0, 0, 0, 0)
-                            _refresh_count()
+                            if 1 <= slot <= 25:
+                                slots.append((slot, 0, 0, 0, 0, LEARNED_FLAG))  # 注册反馈:0 坐标+已学习
                     except Exception as e:
                         print("[face_detect] register error: %s" % e)
+            # 未注册人脸(未进入 recognition_results 的 det)上报 id=0 + learned=0:
+            # 主机可区分已学习目标(id 1~25)与未学习目标(id=0)
+            matched_idx = set(i for i, _mid in recognition_results)
+            for i in range(min(len(det_boxes), REG_MAX_FACES)):
+                if i in matched_idx:
+                    continue
+                det = det_boxes[i]
+                slots.append((0,
+                              int(det[0] * disp_w // rgb_w),
+                              int(det[1] * disp_h // rgb_h),
+                              int(det[2] * disp_w // rgb_w),
+                              int(det[3] * disp_h // rgb_h), 100))
     else:
         do_reg = False
     # 非识别帧:按中心最近邻把缓存 ID 关联到新框(防旧结果贴错新框窜脸;
@@ -271,14 +283,6 @@ def on_frame(img):
     _face_det.draw_result(img, det_boxes, recognition_results)
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
-
-
-def _refresh_count():
-    if _count_label is not None:
-        try:
-            _count_label.set_text(_RUNTIME.lang.t("face_detect.registered", len(_db_features)))
-        except Exception:
-            pass
 
 
 def _on_list_clicked(e):
@@ -346,7 +350,6 @@ def _on_clear_clicked(e):
     face_db.clear()
     _db_features.clear()
     _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前执行(坑#2 安全窗口)
-    _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
     _close_overlay = True
@@ -379,7 +382,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent preview area, and empty bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label
+    global _screen, _top_bar, _bottom_bar, _preview
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -490,17 +493,11 @@ def _build_ui(runtime, exit_flag):
         list_lbl.center()
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
-    count_label = lv.label(_bottom_bar)
-    count_label.set_text(runtime.lang.t("face_detect.registered", len(_db_features)))
-    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
-    count_label.align(lv.ALIGN.CENTER, 0, 0)
-    _count_label = count_label
-
 
 def _destroy_ui():
     """Delete LVGL objects and restore screen opacity for the menu."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label, _overlay, _clear_btn, _save_btn
-    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview, _count_label):
+    global _screen, _top_bar, _bottom_bar, _preview, _overlay, _clear_btn, _save_btn
+    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview):
         if obj is not None:
             try:
                 obj.delete()
@@ -512,7 +509,6 @@ def _destroy_ui():
     _top_bar = None
     _bottom_bar = None
     _preview = None
-    _count_label = None
     try:
         from ui.theme import Colors
         scr = lv.scr_act()

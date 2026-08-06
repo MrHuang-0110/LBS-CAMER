@@ -40,6 +40,8 @@ BOX_COLORS = {
     4: 0xCC44FF,   # 紫
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
+LEARNED_FLAG = 0x80
 
 # 6 阈值格定义:(key, 显示文本, lo, hi, default)。标签用短英文(Lmin/Lmax/...),
 # 通用缩写不走 i18n,3 字母在 52px 格内可读。
@@ -115,7 +117,6 @@ _preview = None
 _table = None          # 左表容器(自建 4×3 网格,非 lv.table)
 _table_cells = {}      # {(row,col): label_obj} 12 格标签
 _table_rows = [None, None, None]  # 3 个采色行容器(供设底色)
-_count_label = None
 _id_registry = None
 _color_db = None
 _slider = None         # 共享滑块
@@ -328,7 +329,6 @@ def _on_clear_clicked(e):
         return
     _color_db.clear()
     _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
-    _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
     _close_overlay = True
@@ -357,18 +357,9 @@ def _process_overlay_close():
     _overlay = None
 
 
-def _refresh_count():
-    if _count_label is not None and _RUNTIME is not None:
-        try:
-            _count_label.set_text(
-                _RUNTIME.lang.t("color_detect.registered", _color_db.count))
-        except Exception:
-            pass
-
-
 def _build_ui(runtime, exit_flag):
-    """顶栏(返回+标题) + 左表 + 透明预览(可取色) + 底栏(list+6格+滑块+计数)。"""
-    global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
+    """顶栏(返回+标题) + 左表 + 透明预览(可取色) + 底栏(list+6格+滑块)。"""
+    global _screen, _top_bar, _bottom_bar, _preview, _table, _slider
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -538,13 +529,6 @@ def _build_ui(runtime, exit_flag):
         _make_cell(_bottom_bar, key, label_text, lo, hi, dflt,
                    _cells_start + i * _cell_w, _cell_w - 4)
 
-    # 计数(最右)
-    count_label = lv.label(_bottom_bar)
-    count_label.set_text(runtime.lang.t("color_detect.registered", 0))
-    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
-    count_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
-    _count_label = count_label
-
 
 def _current_threshold_tuple():
     """从 _thresh_values 取当前 6 阈值 tuple。"""
@@ -608,7 +592,7 @@ def on_frame(img):
     if _RUNTIME is None:
         return
     img_det = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_1)
-    slots = [None, None, None, None]
+    slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     cur_th = _current_threshold_tuple()
 
     # 处理 pending_click 取色。
@@ -650,6 +634,12 @@ def on_frame(img):
         img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
                            w * DET_SCALE, h * DET_SCALE,
                            color=color, thickness=2)
+        # 当前色未注册(与任一注册色阈值不完全相等) → 上报 id=0 + learned=0
+        cur_registered = any(entry['threshold'] == cur_th
+                             for _i, entry in _color_db.iter_slots())
+        if not cur_registered:
+            slots.append((0, x * DET_SCALE, y * DET_SCALE,
+                          w * DET_SCALE, h * DET_SCALE, 100))
 
     # 注册色检测 -> 彩色 ID 框 + 填 slots
     for entry_idx, entry in _color_db.iter_slots():
@@ -663,8 +653,8 @@ def on_frame(img):
                                color=color, thickness=4)
             img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
                                      "ID%d" % entry_idx, color=color)
-            slots[entry_idx - 1] = (entry_idx, x * DET_SCALE, y * DET_SCALE,
-                               w * DET_SCALE, h * DET_SCALE, 100)
+            slots.append((entry_idx, x * DET_SCALE, y * DET_SCALE,
+                          w * DET_SCALE, h * DET_SCALE, 100 | LEARNED_FLAG))  # 已学习:bit7=1
 
     # 居中绿色十字(对齐 tag_detect)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
@@ -682,7 +672,6 @@ def on_frame(img):
             registrar=lambda th: _color_db.register(th, rgb=latest_rgb))
         if slot is not None:
             _color_db.flush_to_disk(_COLOR_DB_PATH)  # 注册即写（on_frame 内，task_handler 前）
-            _refresh_count()
             print("[color_detect] registered -> ID%d (lab=%r)" % (slot, lab_mid))
         else:
             print("[color_detect] KEY2 pending but register returned None")
@@ -692,10 +681,10 @@ def on_frame(img):
 
 
 def _destroy_ui():
-    global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
+    global _screen, _top_bar, _bottom_bar, _preview, _table, _slider
     global _overlay, _clear_btn, _save_btn, _table_rows
     for obj in (_clear_btn, _save_btn, _overlay, _slider, _table,
-                _top_bar, _bottom_bar, _preview, _count_label):
+                _top_bar, _bottom_bar, _preview):
         if obj is not None:
             try:
                 obj.delete()
@@ -709,7 +698,6 @@ def _destroy_ui():
     _top_bar = None
     _bottom_bar = None
     _preview = None
-    _count_label = None
     _thresh_labels.clear()
     _thresh_cells.clear()
     _table_cells.clear()
@@ -733,7 +721,6 @@ def run(runtime):
     exit_flag = [False]
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
-    _refresh_count()  # load 后刷新计数（显示已学习数量）
     fc = 0
     try:
         while not exit_flag[0]:

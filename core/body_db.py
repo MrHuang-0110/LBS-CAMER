@@ -81,7 +81,7 @@ class _BodyDB:
 
     def __init__(self):
         self._features = {}        # {slot_id: list}
-        self._next_slot = 1        # 轮转覆盖指针(1-4 循环)
+        self._next_slot = 1        # 轮转覆盖指针(1-25 循环)
         self._dirty = False
         self._clear_dirty = False
 
@@ -93,13 +93,13 @@ class _BodyDB:
         """
         feat = _to_list(feature)
         slot = None
-        for i in range(1, 5):
+        for i in range(1, 26):
             if i not in self._features:
                 slot = i
                 break
         if slot is None:
             slot = self._next_slot
-            self._next_slot = self._next_slot % 4 + 1
+            self._next_slot = self._next_slot % 25 + 1
         self._features[slot] = feat
         self._dirty = True
         self._clear_dirty = False

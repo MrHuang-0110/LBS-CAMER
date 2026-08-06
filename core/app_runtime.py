@@ -300,13 +300,14 @@ class AppRuntime:
         fpioa.set_function(41, FPIOA.UART1_RXD)
         self.host = HostAPI()
 
-    def host_tick(self, slots=None):
-        """每帧调：握手轮询 + 按当前 category 推送4组数据。
+    def host_tick(self, slots=None, names=None):
+        """每帧调：握手轮询 + 按当前 category 推送数据（可选名称帧）。
 
         slots=None → 4组全0（主菜单/相机/settings）。face_detect 传匹配槽位。
+        names 非 None → 数据帧后追加名称帧（类型 0x0E，见 comm/host_api）。
         """
         if self.host is not None:
-            self.host.tick(self.category_id, slots)
+            self.host.tick(self.category_id, slots, names)
 
     def cleanup(self):
         """脚本退出前清理（显式，虽 reset 会清）。"""

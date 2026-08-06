@@ -30,6 +30,8 @@ BOX_COLORS = {
     4: 0xCC44FF,   # 紫
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
+LEARNED_FLAG = 0x80
 # 检测/识别一体降频:每 DET_INTERVAL 帧跑一次完整 run(chn2 取流+NPU),
 # 其余帧用缓存框+缓存识别结果画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
 DET_INTERVAL = 2
@@ -49,7 +51,6 @@ _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_count_label = None
 _id_registry = None
 _person_rec = None
 _db_features = {}
@@ -151,7 +152,7 @@ def on_frame(img):
         return
     det_boxes, features = _last_det
     rec = _last_rec
-    slots = [None, None, None, None]
+    slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
@@ -186,8 +187,7 @@ def on_frame(img):
                 filled_slots.add(slot)
                 rec[i] = slot
                 conf = int(score * 100)
-                if 1 <= slot <= 4:
-                    slots[slot - 1] = (slot, x, y, w, h, conf)
+                slots.append((slot, x, y, w, h, conf | LEARNED_FLAG))  # 已学习:bit7=1
         _last_rec = rec
         # K2 注册:当前帧最大人体(检测帧才有新鲜 features)
         if _id_registry is not None and _id_registry.has_pending() and det_boxes:
@@ -204,7 +204,6 @@ def on_frame(img):
                     if slot is not None:
                         body_db.flush_to_disk()  # 注册即写(task_handler 前安全窗口)
                         _db_features[slot] = body_db.get_features().get(slot)
-                        _refresh_count()
                 except Exception as e:
                     print("[body_detect] register error: %s" % e)
     # 画框:每帧(检测帧新框/非检测帧缓存框;ID 与框同源,索引一致)
@@ -218,15 +217,6 @@ def on_frame(img):
         _last_slots = slots
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
-
-
-def _refresh_count():
-    if _count_label is not None:
-        try:
-            _count_label.set_text(
-                _RUNTIME.lang.t("body_detect.registered", len(_db_features)))
-        except Exception:
-            pass
 
 
 def _on_list_clicked(e):
@@ -290,7 +280,6 @@ def _on_clear_clicked(e):
     body_db.clear()
     _db_features.clear()
     _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
-    _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
     _close_overlay = True
@@ -321,7 +310,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent preview area, and bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label
+    global _screen, _top_bar, _bottom_bar, _preview
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -432,17 +421,13 @@ def _build_ui(runtime, exit_flag):
         list_lbl.center()
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
-    count_label = lv.label(_bottom_bar)
-    count_label.set_text(runtime.lang.t("body_detect.registered", len(_db_features)))
-    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
-    count_label.align(lv.ALIGN.CENTER, 0, 0)
-    _count_label = count_label
+    # 底栏计数(已学习 x/x)已按用户要求去掉
 
 
 def _destroy_ui():
     """Delete LVGL objects and restore screen opacity for the menu."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label, _overlay, _clear_btn, _save_btn
-    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview, _count_label):
+    global _screen, _top_bar, _bottom_bar, _preview, _overlay, _clear_btn, _save_btn
+    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview):
         if obj is not None:
             try:
                 obj.delete()
@@ -454,7 +439,6 @@ def _destroy_ui():
     _top_bar = None
     _bottom_bar = None
     _preview = None
-    _count_label = None
     try:
         from ui.theme import Colors
         scr = lv.scr_act()

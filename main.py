@@ -63,14 +63,23 @@ def _clear_next_script():
         pass
 
 
-def _on_remote_switch(category):
+def _on_remote_switch(category, option=None):
     """主机远程切换脚本回调(HostAPI 解析命令帧后调用)。
 
     category=None → 回主菜单(清 .next_script + reset)。
     category=str  → 进对应脚本(写 .next_script + reset)。
+    option 非 None → 标签识别快捷切换(mode 0x14/0x15):先把子功能写入
+    .tag_fn(tag_detect 启动时按此记忆启动),再按原链路切脚本。
     复用菜单点击路径(_write_next_script + machine.reset),与本地点击一致。
     """
     print("[CamerAi] remote switch -> %s" % ("main_menu" if category is None else category))
+    if option is not None:
+        try:
+            from core.tag_mode import write_tag_fn
+            write_tag_fn(option)
+            print("[CamerAi] tag fn -> %s" % option)
+        except Exception as e:
+            print("[CamerAi] write .tag_fn failed: %s" % e)
     if category is None:
         _clear_next_script()
     else:

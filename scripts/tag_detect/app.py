@@ -16,6 +16,7 @@ from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_1
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core import tag_scan
+from core import tag_mode
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -33,9 +34,10 @@ _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_active_fn = "april"      # "april" | "qr"
+_active_fn = "april"      # "april" | "qr";run() 启动时按 .tag_fn 记忆覆盖
 _april_card = None
 _qr_card = None
+_tag_fn_dirty = False   # 切换功能后置位:主循环 task_handler 前落盘 .tag_fn(坑#2)
 
 
 def on_frame(img):
@@ -73,19 +75,24 @@ def on_frame(img):
         img.draw_string_advanced(x, y - 24, 24, "ID:" + str(codes[i]),
                                  color=BOX_WHITE)
 
+    # 名称帧(类型 0x0E):id + 识别内容(QR=payload 原文 / AprilTag=码值字符串)
+    names = [(slots[i][0], str(codes[i])) for i in range(len(slots))]
+
     # 屏幕居中绿色十字(对准参考,小一点):VGA 640x480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
-        _RUNTIME.host_tick(slots)
+        _RUNTIME.host_tick(slots, names)
 
 
 def _switch_fn(fn):
-    """切换 AprilTag / QR 功能。"""
-    global _active_fn
+    """切换 AprilTag / QR 功能。只改内存 + 置 dirty,写 .tag_fn 由主循环
+    task_handler 前安全窗口执行(LVGL 事件回调在 task_handler 内,坑#2)。"""
+    global _active_fn, _tag_fn_dirty
     if fn == _active_fn:
         return
     _active_fn = fn
+    _tag_fn_dirty = True
     if _april_card is not None:
         _april_card.set_style_bg_color(
             lv.color_hex(CARD_ACTIVE if fn == "april" else CARD_BG), 0)
@@ -254,8 +261,11 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME
+    global _RUNTIME, _active_fn, _tag_fn_dirty
     _RUNTIME = runtime
+    # 记忆启动:按 .tag_fn 上次选择决定初始功能(首次 task_handler 前安全窗口读取)
+    _active_fn = tag_mode.read_tag_fn()
+    _tag_fn_dirty = False
     exit_flag = [False]
     _build_ui(runtime, exit_flag)
     fc = 0
@@ -271,11 +281,17 @@ def run(runtime):
                     sys.print_exception(e)
                 except Exception:
                     pass
+            # 切换功能后落盘 .tag_fn(task_handler 前安全窗口,坑#2)
+            if _tag_fn_dirty:
+                tag_mode.write_tag_fn(_active_fn)
+                _tag_fn_dirty = False
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
             if fc % 30 == 0:
                 print("[tag_detect] fc=%d" % fc)
     finally:
+        if _tag_fn_dirty:
+            tag_mode.write_tag_fn(_active_fn)  # 退出兜底(异常/正常退出均落盘)
         _destroy_ui()
         _RUNTIME = None

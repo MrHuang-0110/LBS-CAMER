@@ -56,7 +56,6 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Learned %d/4",
     "press_k2": "Press K2 to register",
     "back_fb": "<",
     "list_fb": "="
@@ -66,12 +65,10 @@
     "qr_code": "QR Code"
   },
   "object_detect": {
-    "registered": "Learned %d/4",
     "clear": "Clear",
     "save": "Save"
   },
   "color_detect": {
-    "registered": "Lrn %d/4",
     "clear": "Clear",
     "save": "Save",
     "Lmin": "Lmin",
@@ -89,7 +86,6 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Learned %d/4",
     "press_k2": "Press K2 to register gesture",
     "back_fb": "<",
     "list_fb": "="
@@ -98,7 +94,6 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Learned %d/4",
     "press_k2": "Press K2 to register body",
     "back_fb": "Back",
     "list_fb": "List"
@@ -107,7 +102,6 @@
     "save": "Save",
     "clear": "Clear",
     "save_success": "Saved",
-    "registered": "Learned %d/4",
     "press_k2": "Press K2 to learn locked object",
     "lock_hint": "Tap object to lock",
     "back_fb": "Back",

@@ -41,7 +41,7 @@ class _FaceDB:
     def __init__(self):
         self._features = {}   # {slot_id: np_array}  运行时使用
         self._loaded = False
-        self._next_slot = 1   # Step 7: 轮转覆盖指针(1-4 循环)，clear()/init_features() 读写
+        self._next_slot = 1   # Step 7: 轮转覆盖指针(1-25 循环)，clear()/init_features() 读写
         self._dirty = False        # register changed memory; flush at exit
         self._clear_dirty = False  # clear requested; remove all .bin at exit
 
@@ -69,7 +69,7 @@ class _FaceDB:
             os.stat(_NEXT_SLOT_PATH)
             with open(_NEXT_SLOT_PATH, 'r') as f:
                 v = int(f.read().strip())
-            self._next_slot = v if 1 <= v <= 4 else 1
+            self._next_slot = v if 1 <= v <= 25 else 1
         except Exception:
             self._next_slot = 1
 
@@ -99,13 +99,13 @@ class _FaceDB:
         - 无空槽:覆盖 _next_slot 指向的槽,指针轮转 1→2→3→4→1
         """
         slot = None
-        for i in range(1, 5):
+        for i in range(1, 26):
             if i not in self._features:
                 slot = i
                 break
         if slot is None:
             slot = self._next_slot
-            self._next_slot = self._next_slot % 4 + 1
+            self._next_slot = self._next_slot % 25 + 1
         self._features[slot] = feature
         self._dirty = True
         self._clear_dirty = False  # register 在 clear 之后执行 → 取消清除意图

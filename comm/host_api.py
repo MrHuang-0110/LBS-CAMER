@@ -19,16 +19,20 @@ import time as _time
 
 
 # ── 统一动态 N 组协议:槽位排序/截断 ──
-MAX_REG_SLOTS = 4   # 非标签模式注册槽上限(与各脚本固定 4 槽语义对齐)
+# 所有模式槽位上限统一 25(原 tag=25 / 注册类=4 的区分已取消,学习 ID 上限同步放开)。
+
+LEARNED_FLAG = 0x80   # conf 字节 bit7 = 已学习标记(按过 KEY);conf 低 7 位 0~100 不冲突
+TYPE_NAME = 0x0E      # 名称帧类型码(通用:识别名称/内容上传,见 send_name_data)
 
 
-def order_slots(filled, max_slots=MAX_REG_SLOTS):
+def order_slots(filled, max_slots=25):
     """统一槽位排序:过滤空槽 → 按 (x,y) 升序(最左=目标1) → 截断 max_slots。
 
     与 core/tag_scan.build_slots 排序规则一致;id 字段保持各模式原语义
     (注册槽号/类别槽号/码值不变),仅槽位发送顺序按屏幕位置。
     filled: list[(id,x,y,w,h,conf) 或 None];坐标须已为发送单位(VGA)。
     Returns: list[(id,x,y,w,h,conf)],无命中 → []。
+    上限默认 25(= HostAPI.MAX_ID_SLOTS,所有模式统一;协议 length 字段约束)。
     """
     items = [s for s in filled if s is not None]
     items = sorted(items, key=lambda t: (t[1], t[2]))
@@ -58,7 +62,7 @@ class HostAPI:
     TYPE_IMAGE_CLASSIFY  = 0x13
 
     # 单帧 ID 数据最大槽位数(25×10B=250B ≤ length 字段 255 上限)。
-    # tag_detect 全屏扫描上限;其它注册类模式上限见模块级 MAX_REG_SLOTS。
+    # 所有模式统一 25(原注册类 4 上限已取消)。
     MAX_ID_SLOTS = 25
 
     # ── 主机→摄像头 脚本切换命令帧 ──
@@ -89,6 +93,7 @@ class HostAPI:
 
     # mode → category 反向映射(主机切换命令帧的 mode 字段 → 脚本 category)。
     # 0x01 = 回主菜单(category=None → 清 .next_script + reset)。
+    # 0x14/0x15 = 标签识别快捷切换(→ tag_detect,子功能由 MODE_TO_TAG_FN 指定)。
     MODE_TO_CATEGORY = {
         0x01: None,               # 主菜单
         0x02: "camera",
@@ -101,6 +106,15 @@ class HostAPI:
         0x11: "body_detect",
         0x12: "object_classify",
         0x13: "image_classify",
+        0x14: "tag_detect",        # 二维码(快捷切换)
+        0x15: "tag_detect",        # AprilTag(快捷切换)
+    }
+
+    # 标签识别子功能快捷切换:mode → tag_detect 初始功能(经 .tag_fn 落盘)。
+    # 0x04 = tag_detect 默认(按记忆值);0x14 = 强制二维码;0x15 = 强制 AprilTag。
+    MODE_TO_TAG_FN = {
+        0x14: "qr",
+        0x15: "april",
     }
 
     # 握手相关
@@ -129,11 +143,14 @@ class HostAPI:
         self._tx_len = 0
         # 预分配 id 数据载荷缓冲(250B),send_id_data 每帧复用,零分配。
         self._id_payload = bytearray(250)
+        # 预分配名称帧载荷缓冲(250B),send_name_data 复用,零分配。
+        self._name_payload = bytearray(250)
         # 板端诊断:低频打印实际 category→msg_type 映射,用于排查主机收到类型不对。
         self._diag_tick_count = 0
         self._diag_last_category = None
         self._diag_last_msg_type = None
-        # 主机→摄像头切换命令回调:cb(category),category=str 或 None(回菜单)。
+        # 主机→摄像头切换命令回调:cb(category, option=None),category=str 或 None(回菜单),
+        # option ∈ {"qr", "april", None}(0x14/0x15 标签识别快捷切换时指定子功能)。
         self._switch_handler = None
 
     # ── 公开属性 ──
@@ -223,10 +240,12 @@ class HostAPI:
         Args:
             msg_type: 类型码 (int, 1字节)
             slots: list 或 None。每元素 (id,x,y,w,h,conf)。
-                   N = min(len(slots), MAX_ID_SLOTS);None/空 → 0 字节载荷
+                   N = min(len(slots), MAX_ID_SLOTS=25);None/空 → 0 字节载荷
                    (主菜单/相机"无目标"场景,主机按 length 解析)。
                    每组 10 字节: id(1B) + x(2B BE) + y(2B BE)
                                 + w(2B BE) + h(2B BE) + conf(1B)
+                   conf 字节: bit7=learned(已学习标记,见 LEARNED_FLAG),
+                   低 7 位=置信度 0~100 —— 脚本组槽时 conf 已带 bit7,此处直通编码。
                    ⚠️ 大端(BE):对齐主机 _camer_cam_data 大端解析
                    (data[off+1]<<8)|data[off+2]。小端会致坐标值错乱。
         """
@@ -255,13 +274,51 @@ class HostAPI:
         # 只发前 n*10 字节:length 参数避免切片分配(零分配保持)
         self.send_frame(msg_type, buf, length=n * 10)
 
-    def tick(self, category_id, slots=None):
-        """每帧调：握手轮询 + 按 category 推送数据。
+    def send_name_data(self, src_type, names):
+        """发送名称帧(类型 0x0E):识别名称/内容上传,与数据帧按 id 关联。
+
+        Args:
+            src_type: 所属模式类型码(如 0x04 标签 / 0x05 物体 / 0x12 分类 /
+                      0x10 手势)——payload 首字节,主机据此关联到最近数据帧。
+            names: list[(id, name_str)]。id = 数据帧同轮目标的 id 字段;
+                   未学习目标(id=0)不传名称(调用方过滤)。
+
+        帧: 5A A7 97 <len> 0E [src_type][id,len,name...] chk A5
+        payload = 1(src_type) + Σ(id(1B) + len(1B) + utf8(name)),≤ 250B;
+        超余量截断单名称/丢弃放不下的目标(下轮重发),不抛异常。
+        names 为空 → 不发帧(无名称模式不发名称帧)。
+        """
+        if not names:
+            return
+        buf = self._name_payload  # 预分配复用,零分配
+        off = 0
+        buf[off] = src_type & 0xFF
+        off += 1
+        for fid, name in names:
+            if off + 2 > len(buf):
+                break  # 余量不足再放一组(id+len 至少 2B)
+            if isinstance(name, str):
+                name_b = name.encode("utf-8")
+            else:
+                name_b = bytes(name)
+            room = len(buf) - off - 2
+            if len(name_b) > room:
+                name_b = name_b[:room]  # 单名称按余量截断
+            buf[off]     = fid & 0xFF
+            buf[off + 1] = len(name_b)
+            buf[off + 2:off + 2 + len(name_b)] = name_b
+            off += 2 + len(name_b)
+        if off <= 1:
+            return  # 无名称段(防御)
+        self.send_frame(TYPE_NAME, buf, length=off)
+
+    def tick(self, category_id, slots=None, names=None):
+        """每帧调：握手轮询 + 按 category 推送数据(可选名称帧)。
 
         统一动态 N 组协议:slots 非 None 时先过滤空槽 + 按 (x,y) 升序
-        (最左=目标1,与 tag_detect 一致) + 按模式上限截断
-        (tag_detect=25 / 其它注册类=4),只发命中的 N 组(N×10B);
-        slots=None → 0 字节载荷(主菜单/相机/无目标场景)。
+        (最左=目标1,与 tag_detect 一致) + 按统一上限 25 截断,只发命中的
+        N 组(N×10B);slots=None → 0 字节载荷(主菜单/相机/无目标场景)。
+        names 非空时数据帧后追加名称帧(类型 0x0E,src_type=本模式类型码)。
         主机须按帧 length 字段解析 N 组,不得假设固定组数。
         """
         self.poll_handshake()
@@ -272,8 +329,7 @@ class HostAPI:
                 return
         msg_type = self.CATEGORY_TYPE.get(category_id, self.TYPE_MAIN_MENU)
         if slots is not None:
-            max_slots = self.MAX_ID_SLOTS if category_id == "tag_detect" else MAX_REG_SLOTS
-            slots = order_slots(slots, max_slots)
+            slots = order_slots(slots, self.MAX_ID_SLOTS)
         self._diag_tick_count += 1
         if category_id != self._diag_last_category or msg_type != self._diag_last_msg_type \
                 or self._diag_tick_count % 30 == 0:
@@ -282,6 +338,8 @@ class HostAPI:
             self._diag_last_category = category_id
             self._diag_last_msg_type = msg_type
         self.send_id_data(msg_type, slots)
+        if names:
+            self.send_name_data(msg_type, names)
 
     # ── 握手状态机 ──
 
@@ -354,12 +412,13 @@ class HostAPI:
             if parsed is not None:
                 mode, _nxt = parsed
                 category = self.MODE_TO_CATEGORY.get(mode)
+                option = self.MODE_TO_TAG_FN.get(mode)  # 0x14→"qr", 0x15→"april", 其它 None
                 if mode in self.MODE_TO_CATEGORY:
-                    print("[HostAPI] switch frame mode=0x%02X category=%s" %
-                          (mode, category))
+                    print("[HostAPI] switch frame mode=0x%02X category=%s option=%s" %
+                          (mode, category, option))
                     if self._switch_handler is not None:
                         try:
-                            self._switch_handler(category)
+                            self._switch_handler(category, option)
                         except Exception as e:
                             print("[HostAPI] switch handler error: %s" % e)
                 else:
@@ -394,8 +453,10 @@ class HostAPI:
         """注册主机→摄像头切换命令回调。
 
         Args:
-            callback: func(category) — category 为 str(脚本 category_id)
-                      或 None(回主菜单)。由 main.py 执行写 .next_script + reset。
+            callback: func(category, option=None) — category 为 str(脚本 category_id)
+                      或 None(回主菜单);option 为 "qr"/"april"(mode 0x14/0x15 标签
+                      识别快捷切换时指定子功能)或 None。由 main.py 执行写
+                      .next_script(+ .tag_fn) + reset。
         """
         self._switch_handler = callback
 

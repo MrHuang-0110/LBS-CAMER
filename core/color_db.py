@@ -21,7 +21,7 @@ class ColorDB:
 
     def __init__(self):
         self._features = {}        # {slot_id: {'threshold':th, 'lab':(L,A,B), 'rgb':int}}
-        self._next_slot = 1        # 轮转覆盖指针(1-4 循环)
+        self._next_slot = 1        # 轮转覆盖指针(1-25 循环)
         self._dirty = False
         self._clear_dirty = False
 
@@ -37,13 +37,13 @@ class ColorDB:
             if entry['threshold'] == th_in:
                 return slot_id
         slot = None
-        for i in range(1, 5):
+        for i in range(1, 26):
             if i not in self._features:
                 slot = i
                 break
         if slot is None:
             slot = self._next_slot
-            self._next_slot = self._next_slot % 4 + 1
+            self._next_slot = self._next_slot % 25 + 1
         th, lab = threshold
         # threshold 字段只存 6 阈值 (Lmin,Lmax,Amin,Amax,Bmin,Bmax),
         # 中心 LAB 单独存 lab —— find_blobs 直接用 entry['threshold'] 即可。

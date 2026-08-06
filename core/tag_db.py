@@ -17,7 +17,7 @@ class TagDB:
 
     def __init__(self):
         self._features = {}        # {slot_id: code_id}
-        self._next_slot = 1        # 轮转覆盖指针(1-4 循环)
+        self._next_slot = 1        # 轮转覆盖指针(1-25 循环)
         self._dirty = False
         self._clear_dirty = False
 
@@ -28,13 +28,13 @@ class TagDB:
         返回 slot_id(1-4)。纯内存,设 _dirty。
         """
         slot = None
-        for i in range(1, 5):
+        for i in range(1, 26):
             if i not in self._features:
                 slot = i
                 break
         if slot is None:
             slot = self._next_slot
-            self._next_slot = self._next_slot % 4 + 1
+            self._next_slot = self._next_slot % 25 + 1
         self._features[slot] = code_id
         self._dirty = True
         self._clear_dirty = False

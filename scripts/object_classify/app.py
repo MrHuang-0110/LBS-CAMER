@@ -33,6 +33,8 @@ BOX_COLORS = {
     4: 0xCC44FF,   # 紫
 }
 BOX_UNKNOWN = 0xFFFFFF   # 未注册白框
+# conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
+LEARNED_FLAG = 0x80
 BOX_LOCK = 0xFFD700      # 锁定高亮黄框
 # 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+run),其余帧用缓存
 # det_boxes/features/disp_boxes 画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
@@ -52,7 +54,6 @@ _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_count_label = None
 _id_registry = None
 _ocr = None                 # ObjectClassifyRecognition
 _db_features = {}
@@ -66,6 +67,7 @@ _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
 _last_det = ([], [])      # 上轮 (det_boxes, features) 缓存
 _last_disp = []           # 上轮 disp_boxes 缓存(非检测帧画框/触摸用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
+_last_names = None        # 上轮名称帧列表(非检测帧复用)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 
 
@@ -146,7 +148,8 @@ def on_frame(img):
             disp_boxes.append((x, y, w, h))
         _last_disp = disp_boxes
 
-    slots = [None, None, None, None]
+    slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
+    names = []   # 名称帧(类型 0x0E):[(id, 名称)],已注册目标用 obj<槽号> 标识
     filled = set()
 
     # 触摸点击处理(优先,可能改变锁定态)
@@ -176,10 +179,11 @@ def on_frame(img):
             if slot is not None:
                 img.draw_string_advanced(x + 2, y - 24, 24,
                                          "ID%d LOCK" % slot, color=color)
-                slots[slot - 1] = (slot, x, y, w, h, conf)
+                slots.append((slot, x, y, w, h, conf | LEARNED_FLAG))  # 已学习:bit7=1
+                names.append((slot, "obj%d" % slot))
             else:
                 img.draw_string_advanced(x + 2, y - 24, 24, "LOCK", color=color)
-                slots[0] = (0, x, y, w, h, conf)  # id=0 表示锁定但未注册
+                slots.append((0, x, y, w, h, conf))  # id=0 锁定但未注册(learned=0)
         else:
             # 锁定丢失:目标离开画面/被遮挡 → 自动解锁
             _locked_feature = None
@@ -194,7 +198,8 @@ def on_frame(img):
                 img.draw_rectangle(x, y, w, h, color=color, thickness=4)
                 img.draw_string_advanced(x + 2, y - 24, 24,
                                          "ID%d" % slot, color=color)
-                slots[slot - 1] = (slot, x, y, w, h, int(sc * 100))
+                slots.append((slot, x, y, w, h, int(sc * 100) | LEARNED_FLAG))  # 已学习:bit7=1
+                names.append((slot, "obj%d" % slot))
                 filled.add(slot)
             else:
                 color = _draw_color(BOX_UNKNOWN)
@@ -214,26 +219,18 @@ def on_frame(img):
             if slot is not None:
                 object_classify_db.flush_to_disk()
                 _db_features[slot] = object_classify_db.get_features().get(slot)
-                _refresh_count()
         except Exception as e:
             print("[object_classify] register error: %s" % e)
 
     # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
     if not do_det and _last_slots is not None:
         slots = _last_slots
+        names = _last_names
     else:
         _last_slots = slots
+        _last_names = names
     if _RUNTIME is not None and _RUNTIME.host is not None:
-        _RUNTIME.host_tick(slots)
-
-
-def _refresh_count():
-    if _count_label is not None:
-        try:
-            _count_label.set_text(
-                _RUNTIME.lang.t("object_classify.registered", len(_db_features)))
-        except Exception:
-            pass
+        _RUNTIME.host_tick(slots, names)
 
 
 def _on_preview_clicked(e):
@@ -309,7 +306,6 @@ def _on_clear_clicked(e):
     object_classify_db.clear()
     _db_features.clear()
     _pending_clear_flush = True  # 清除即写盘:主循环 task_handler 前安全窗口执行(防断电重启旧数据回魂)
-    _refresh_count()
     if _RUNTIME is not None and _RUNTIME.buzzer is not None:
         _RUNTIME.buzzer.beep(ms=200)
     _close_overlay = True
@@ -340,7 +336,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent clickable preview area, and bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label
+    global _screen, _top_bar, _bottom_bar, _preview
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -452,18 +448,14 @@ def _build_ui(runtime, exit_flag):
         list_lbl.center()
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
-    count_label = lv.label(_bottom_bar)
-    count_label.set_text(runtime.lang.t("object_classify.registered", len(_db_features)))
-    count_label.add_style(make_back_bar_text_style(fonts.body), 0)
-    count_label.align(lv.ALIGN.CENTER, 0, 0)
-    _count_label = count_label
+    # 底栏计数(已学习 x/x)已按用户要求去掉
 
 
 def _destroy_ui():
     """Delete LVGL objects and restore screen opacity for the menu."""
-    global _screen, _top_bar, _bottom_bar, _preview, _count_label
+    global _screen, _top_bar, _bottom_bar, _preview
     global _overlay, _clear_btn, _save_btn
-    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview, _count_label):
+    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview):
         if obj is not None:
             try:
                 obj.delete()
@@ -475,7 +467,6 @@ def _destroy_ui():
     _top_bar = None
     _bottom_bar = None
     _preview = None
-    _count_label = None
     try:
         from ui.theme import Colors
         scr = lv.scr_act()

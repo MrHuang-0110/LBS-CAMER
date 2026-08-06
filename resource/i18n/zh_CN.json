@@ -56,7 +56,6 @@
     "save": "保存",
     "clear": "清除",
     "save_success": "保存成功",
-    "registered": "已学习 %d/4",
     "press_k2": "按K2注册人脸",
     "back_fb": "<",
     "list_fb": "="
@@ -66,12 +65,10 @@
     "qr_code": "二维码"
   },
   "object_detect": {
-    "registered": "已学习 %d/4",
     "clear": "清除",
     "save": "保存"
   },
   "color_detect": {
-    "registered": "已学习 %d/4",
     "clear": "清除",
     "save": "保存",
     "Lmin": "L最小",
@@ -89,7 +86,6 @@
     "save": "保存",
     "clear": "清除",
     "save_success": "保存成功",
-    "registered": "已学习 %d/4",
     "press_k2": "按K2注册手势",
     "back_fb": "<",
     "list_fb": "="
@@ -98,7 +94,6 @@
     "save": "保存",
     "clear": "清除",
     "save_success": "已保存",
-    "registered": "已学习 %d/4",
     "press_k2": "按 K2 注册人体",
     "back_fb": "返回",
     "list_fb": "列表"
@@ -107,7 +102,6 @@
     "save": "保存",
     "clear": "清除",
     "save_success": "已保存",
-    "registered": "已学习 %d/4",
     "press_k2": "按 K2 学习锁定物体",
     "lock_hint": "点击物体锁定",
     "back_fb": "返回",
