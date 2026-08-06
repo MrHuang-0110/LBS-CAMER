@@ -122,6 +122,10 @@ def on_frame(img):
         except Exception as e:
             print("[object_detect] run error: %s" % e)
             dets = []
+        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
+        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        del img_np
+        del img_ai
         gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
         # 每类别取面积最大实例
         per_class_max = {}   # class_id -> [l,t,r,b,score,cid]

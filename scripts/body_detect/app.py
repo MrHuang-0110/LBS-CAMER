@@ -159,6 +159,10 @@ def on_frame(img):
             print("[body_detect] run error: %s" % e)
             det_boxes, features = [], []
         _last_det = (det_boxes, features)
+        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
+        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        del img_np
+        del img_ai
         gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
         # 识别匹配 + 填槽(帧内 ID 去重:一个 slot 只标一个框)
         rec = {}

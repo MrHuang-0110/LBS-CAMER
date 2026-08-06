@@ -130,6 +130,10 @@ def on_frame(img):
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
         _last_det = (det_boxes, features)
+        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
+        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        del img_np
+        del img_ai
         gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
         # 检测框(rgb888p) → 显示坐标(VGA)
         disp_boxes = []

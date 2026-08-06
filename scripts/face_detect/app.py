@@ -265,6 +265,10 @@ def on_frame(img):
                               int(det[1] * disp_h // rgb_h),
                               int(det[2] * disp_w // rgb_w),
                               int(det[3] * disp_h // rgb_h), 100))
+        # 识别/注册全部完成:立即清 chn2 大帧引用(2.25MB 原生缓冲),
+        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        del img_np
+        del img_ai
     else:
         do_reg = False
     # 非识别帧:按中心最近邻把缓存 ID 关联到新框(防旧结果贴错新框窜脸;
