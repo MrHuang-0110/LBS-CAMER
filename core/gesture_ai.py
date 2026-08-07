@@ -265,6 +265,8 @@ class HandRecognition:
             self.hand_rec_kmodel, model_input_size=self.rec_input_size,
             labels=self.labels,
             rgb888p_size=self.rgb888p_size, display_size=self.display_size)
+        # 透传子类 input_is_packed(两个子类同固件下结果一致),供 app 层单通道判定
+        self.input_is_packed = self.hand_det.input_is_packed
         self.hand_det.config_preprocess()
 
     def run(self, img_np):
