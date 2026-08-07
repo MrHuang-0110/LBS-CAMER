@@ -218,24 +218,19 @@ def on_frame(img):
                 best = (i, slot, sc)
 
     if best is not None:
-        # 屏幕四边全局框(识别激活指示)
+        # 屏幕四边全局框(识别激活指示),左上角标命中 ID
         img.draw_rectangle(0, 0, DISPLAY_SIZE[0] - 1, DISPLAY_SIZE[1] - 1,
                            color=_draw_color(BOX_LOCK), thickness=4)
-        # 每个命中已学物体:物体中心标 ID(不画物体框)
+        ids = []
         for i, slot, sc in hits:
             x, y, w, h = disp_boxes[i]
-            img.draw_string_advanced(x + w // 2 - 18, y + h // 2 - 12, 24,
-                                     "ID%d" % slot,
-                                     color=_draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN)))
+            ids.append("ID%d" % slot)
             slots.append((slot, x, y, w, h, int(sc * 100) | LEARNED_FLAG))
             names.append((slot, "obj%d" % slot))
-        # 中央十字架移动到最佳匹配物体中心(对准)
-        bx, by, bw, bh = disp_boxes[best[0]]
-        img.draw_cross(bx + bw // 2, by + bh // 2,
-                       color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
-    else:
-        # 未命中:十字架回中央
-        img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+        img.draw_string_advanced(8, 6, 24, " ".join(ids),
+                                 color=_draw_color(BOX_LOCK))
+    # 十字架固定屏幕中央不动(对准参考):VGA 640×480 中心 (320, 240)
+    img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
     if not do_det and _last_slots is not None:
@@ -499,15 +494,16 @@ def _build_ui(runtime, exit_flag):
         list_lbl.center()
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
-    # 5 个 ID 选项卡(底栏中部):点选学习目标 ID,选中高亮按 ID 槽色
+    # 5 个 ID 选项卡铺满底栏(list 图标右侧到右边缘):点选学习目标 ID,选中绿高亮
     global _tabs
     _tabs = []
-    tab_w = 72
-    tab_gap = 6
+    tab_gap = 4
+    tab_x = 56
+    tab_w = (DISPLAY_SIZE[0] - tab_x - 2 - (MAX_ID_TABS - 1) * tab_gap) // MAX_ID_TABS
     for i in range(1, MAX_ID_TABS + 1):
         tab = lv.btn(_bottom_bar)
         tab.set_size(tab_w, 40)
-        tab.align(lv.ALIGN.LEFT_MID, 60 + (i - 1) * (tab_w + tab_gap), 0)
+        tab.align(lv.ALIGN.LEFT_MID, tab_x, 0)
         tab.set_style_bg_opa(255, 0)
         tab.set_style_radius(8, 0)
         tab.set_style_border_width(0, 0)
@@ -518,6 +514,7 @@ def _build_ui(runtime, exit_flag):
         tab_lbl.center()
         tab.add_event(lambda e, sid=i: _on_tab_clicked(e, sid), lv.EVENT.CLICKED, None)
         _tabs.append(tab)
+        tab_x += tab_w + tab_gap
     _refresh_tabs()
 
     # 底栏计数(已学习 x/x)已按用户要求去掉
