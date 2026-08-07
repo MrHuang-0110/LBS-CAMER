@@ -29,7 +29,8 @@ from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
 # 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框
-DET_INTERVAL = 2
+# 2026-08-07 板端: 2→3(纯 Python postprocess 慢,降推理频率提平均帧率)
+DET_INTERVAL = 3
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
@@ -127,8 +128,6 @@ def on_frame(img):
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
         # img 持有至 show_image。
         img_np = img.to_numpy_ref()
-        print("[object_detect] DBG img=%dx%d np.shape=%s" % (
-            img.width(), img.height(), str(img_np.shape)))
         # packed RGB888 -> planar CHW (3,H,W): ai2d 声明 NCHW_FMT(与
         # Sensor.RGBP888 planar 同义),直接喂 packed 会按平面错读导致全屏
         # 假框(2026-08-07 板端日志 det0=[1,1,630,478] 根因)。逐通道重排;
@@ -143,8 +142,6 @@ def on_frame(img):
         except Exception as e:
             print("[object_detect] run error: %s" % e)
             dets = []
-        if dets is not None and len(dets):
-            print("[object_detect] DBG det0=%s" % (str(dets[0]),))
         # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
         del _planar
         del img_np
