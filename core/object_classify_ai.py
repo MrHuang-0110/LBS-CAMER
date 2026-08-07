@@ -111,16 +111,18 @@ class FeatureExtractionApp(AIBase):
 
 
 class ObjectClassifyRecognition:
-    """物体检测+特征提取组合:先 YOLOv8n 检任意物体,再对每框提特征。
+    """物体特征提取:recognition.kmodel 通用特征(单模型 2026-08-07 用户确认)。
 
-    返回 (det_boxes, features):等长列表(≤max_boxes),按检测顺序对应。
-    det_boxes 元素为 [l,t,r,b,score,class_id](rgb888p 坐标);features 为特征向量。
+    默认双 kmodel(use_det=True):先 YOLOv8n 检任意物体,再对每框提特征,返回
+    (det_boxes, features) 等长列表(≤max_boxes);use_det=False(单 recognition):
+    不建 YOLO detector,app 直接 extract_feature(CENTER_BOX) 中心区域提特征,
+    消除双 kmodel 交替推理(死机最大嫌疑路径,2026-08-07)。
     """
 
     def __init__(self, det_kmodel=OBJ_DET_KMPATH, rec_kmodel=OBJ_RECO_KMPATH,
                  det_input_size=None, rec_input_size=None,
                  max_boxes=MAX_DET_BOXES, confidence_threshold=0.5, nms_threshold=0.2,
-                 rgb888p_size=None, display_size=None, debug_mode=0):
+                 rgb888p_size=None, display_size=None, debug_mode=0, use_det=True):
         if det_input_size is None:
             det_input_size = [320, 320]
         if rec_input_size is None:
@@ -135,29 +137,35 @@ class ObjectClassifyRecognition:
         self.rgb888p_size = [ALIGN_UP(rgb888p_size[0], 16), rgb888p_size[1]]
         self.display_size = [ALIGN_UP(display_size[0], 16), display_size[1]]
         self.debug_mode = debug_mode
+        self.use_det = use_det
 
         # ⚠️ 双 kmodel 顺序根因(坑#19,同 face/body/gesture_detect):
         # rec kmodel 必须在 det.config_preprocess() 之前加载,否则破坏共享 NPU/AI2D 状态。
         self.feature = FeatureExtractionApp(
             rec_kmodel, model_input_size=self.rec_input_size,
             rgb888p_size=self.rgb888p_size, display_size=self.display_size)
-        self.detector = ObjectDetectionApp(
-            det_kmodel, labels=COCO_LABELS, model_input_size=self.det_input_size,
-            confidence_threshold=confidence_threshold, nms_threshold=nms_threshold,
-            rgb888p_size=self.rgb888p_size, display_size=self.display_size,
-            debug_mode=0)
-        self.detector.config_preprocess()
-        # 单通道(死机根治 2026-08-07):AI 吃 chn0 显示帧;det 与 feature 共用
-        # 同一输入格式(packed 零拷贝 or planar 重排),app 按此分支。
-        self.input_is_packed = self.detector.input_is_packed
+        if use_det:
+            self.detector = ObjectDetectionApp(
+                det_kmodel, labels=COCO_LABELS, model_input_size=self.det_input_size,
+                confidence_threshold=confidence_threshold, nms_threshold=nms_threshold,
+                rgb888p_size=self.rgb888p_size, display_size=self.display_size,
+                debug_mode=0)
+            self.detector.config_preprocess()
+            self.input_is_packed = self.detector.input_is_packed
+        else:
+            self.detector = None
+            self.input_is_packed = self.feature.input_is_packed
 
     def run(self, img_np):
-        """推理当前帧。返回 (det_res, feat_res) 等长(≤max_boxes)。
+        """推理当前帧(use_det=True)。返回 (det_res, feat_res) 等长(≤max_boxes)。
 
         det_res: 物体检测框列表,每框 [l,t,r,b,score,class_id](rgb888p 坐标)。
         feat_res: [feature_vec, ...] 每个物体的特征向量(同索引对应)。
-        过滤:过小框(<2px)跳过(避提特征崩)。
+        过滤:过小框(<2px)跳过(避提特征崩)。单模型模式(use_det=False)下
+        app 不走此路径(直接 extract_feature),防御返回空。
         """
+        if self.detector is None:
+            return [], []
         gc.collect()  # 每检测帧 1 次全堆回收(替代每框 config_preprocess 多次,性能 2026-08-07)
         det_boxes = self.detector.run(img_np)
         det_res = []
@@ -198,10 +206,11 @@ class ObjectClassifyRecognition:
         return out
 
     def deinit(self):
-        try:
-            self.detector.deinit()
-        except Exception:
-            pass
+        if self.detector is not None:
+            try:
+                self.detector.deinit()
+            except Exception:
+                pass
         try:
             self.feature.deinit()
         except Exception:

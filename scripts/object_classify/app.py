@@ -1,11 +1,13 @@
-# scripts/object_classify/app.py — 物体分类学习器(双 kmodel + 5 ID 选项卡 + KEY 中心学习)
+# scripts/object_classify/app.py — 物体分类学习器(单 recognition kmodel + 5 ID 选项卡 + KEY 中心学习)
 #
-# 单通道(死机根治 2026-08-07,同 object_detect): AI 直接吃 chn0 显示帧,
-# det(YOLOv8n) + rec(recognition) 共用同一帧。学习器模式(v2,2026-08-07):
+# 单通道(死机根治 2026-08-07,同 object_detect):AI 直接吃 chn0 显示帧。
+# 单模型(2026-08-07 用户确认):去掉 YOLO,只用 recognition.kmodel 通用特征
+# 提取;学习与识别统一对画面中心固定区域提特征——任意物体对准中央可学可
+# 识别,不受 COCO80 类别限制;消除双 kmodel 交替推理(死机最大嫌疑路径)。
 # 无已学 ID 时零推理(预览丝滑);点底栏 ID1~ID5 选学习目标槽(选中绿高亮);
-# 中央十字对准物体按 K2 → 单次 det+1rec 学中心物体到选中 ID 槽 + 全屏黄框
-# 闪烁确认;有已学 ID 时每 DET_INTERVAL 帧降频识别:命中物体不画框,屏幕四边
-# 全局框 + 物体中心标 ID%d + 十字架对准最佳匹配。
+# 中央十字对准物体按 K2 → 中心区域提特征学中心物体到选中 ID 槽 + 预览区
+# 槽位色框闪烁确认;有已学 ID 时每 DET_INTERVAL 帧降频识别:中心区域提特征
+# 匹配,命中画预览区槽位色框 + 左上角槽位色 ID。
 
 import gc
 import os
@@ -19,9 +21,8 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.object_classify_ai import ObjectClassifyRecognition, \
-    OBJ_DET_KMPATH, OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
+    OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
 from core.object_classify_db import object_classify_db, database_search
-from core.object_classify_lock import pick_box_at_point
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -118,22 +119,21 @@ _tabs = []                # 底栏 ID 选项卡对象列表(高亮刷新用)
 
 
 def _init_ai():
-    """Load BOTH kmodels before the loop.
+    """Load recognition kmodel before the loop(单模型 2026-08-07 用户确认)。
 
-    ⚠️ 双 kmodel 顺序根因(坑#19):rec kmodel 必须在 det.config_preprocess()
-    之前加载。ObjectClassifyRecognition.__init__ 已按此顺序加载。
-    kmodel 加载整体包 try/except：失败则 _ai_ready=False，on_frame 跳过推理。
+    只加载 recognition.kmodel(use_det=False):不建 YOLO 检测模型,消除双
+    kmodel 交替推理(死机最大嫌疑路径);学习/识别统一中心区域提特征。
+    kmodel 加载整体包 try/except:失败则 _ai_ready=False,on_frame 跳过推理。
     """
     global _ocr, _db_features, _ai_ready
     _ai_ready = False
     try:
-        print("[object_classify] loading yolov8n detection + recognition models...")
+        print("[object_classify] loading recognition model...")
         _ocr = ObjectClassifyRecognition(
-            OBJ_DET_KMPATH, OBJ_RECO_KMPATH,
-            det_input_size=[320, 320], rec_input_size=[224, 224],
-            confidence_threshold=0.5, nms_threshold=0.2,
+            rec_kmodel=OBJ_RECO_KMPATH,
+            rec_input_size=[224, 224],
             rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
-            debug_mode=0)
+            debug_mode=0, use_det=False)
         _db_features = object_classify_db.init_features()
         _ai_ready = True
         print("[object_classify] AI ready, input_is_packed=%s, loaded %d object(s)" % (
@@ -161,14 +161,13 @@ def _deinit_ai():
 
 
 def on_frame(img):
-    """学习器:DB 空零推理 / K2 学中心物体 / DB 非空降频识别已学 ID(v2 交互)。
+    """学习器:DB 空零推理 / K2 学中心物体 / DB 非空降频识别已学 ID。
 
-    无已学 ID:零 NPU 推理,纯预览 + 中央绿十字,30fps 丝滑。按 K2 → 单次
-    det + 提取画面中心(320,240)物体特征 → register_at 注册到选中 ID 槽 →
-    全屏黄框闪烁确认。识别(DB 非空):每 DET_INTERVAL 帧 det+全框特征+
-    database_search;命中已学 ID 的物体不画物体框——屏幕四边画全局框 +
-    各命中物体中心标 ID%d + 中央十字架移到最佳匹配物体中心;未命中十字架
-    回中央。单通道(AI 吃 chn0 帧,死机根治)。
+    单 recognition 模型(2026-08-07 用户确认):学习与识别统一对画面中心
+    固定区域提特征,任意物体对准中央即可学/识别(不依赖 YOLO 类别)。
+    无已学 ID:零 NPU 推理,纯预览 + 中央绿十字。识别(DB 非空):每
+    DET_INTERVAL 帧中心区域提特征 + database_search;命中 → 预览区
+    槽位色框 + 左上角槽位色 ID。单通道(AI 吃 chn0 帧,死机根治)。
     """
     global _det_counter, _last_det, _last_disp, _last_slots, _last_names, _record_flash
     if _RUNTIME is None or _ocr is None:
@@ -211,13 +210,12 @@ def on_frame(img):
         img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
         try:
             img_np = _ai_input(img)
-            det_boxes, features = _ocr.run(img_np)
-            if not det_boxes:
-                # YOLO 未检到(非 COCO80 类物体):退化中心区域提特征,任意已学物体可识别
-                center_feat = _ocr.extract_feature(CENTER_BOX, img_np)
-                if center_feat is not None:
-                    det_boxes = [list(CENTER_BOX) + [1.0, 0]]
-                    features = [center_feat]
+            feat = _ocr.extract_feature(CENTER_BOX, img_np)
+            if feat is not None:
+                det_boxes = [list(CENTER_BOX) + [1.0, 0]]
+                features = [feat]
+            else:
+                det_boxes, features = [], []
             print("[object_classify] DET n=%d" % len(det_boxes))  # 插桩:定位死机挂点
         except Exception as e:
             print("[object_classify] run error: %s" % e)
@@ -274,8 +272,9 @@ def on_frame(img):
 
 
 def _learn_center(img):
-    """K2 学习画面中心物体:先 YOLO 命中中心框提特征,无框时退化中心
-    固定区域提特征——任意物体对准中央即可学,不受 COCO80 类别限制。
+    """K2 学习画面中心物体:直接对中心固定区域提特征 → 注册到选中 ID 槽。
+
+    任意物体对准中央即可学(单 recognition 模型,不依赖 YOLO 检测框)。
     学习成功:预览区槽位色框闪烁确认 + 左上角 ID + 蜂鸣 + 置 _det_counter
     使下一帧识别首帧必推理(学习帧 on_frame 已 return,避免同帧双重推理)。
     """
@@ -284,17 +283,11 @@ def _learn_center(img):
     feature = None
     try:
         img_np = _ai_input(img)
-        det_boxes = _ocr.detector.run(img_np)
-        disp_boxes = _to_disp_boxes(det_boxes)
-        idx = pick_box_at_point(disp_boxes, 320, 240)
-        print("[object_classify] LEARN det n=%d" % len(det_boxes))  # 插桩:定位死机挂点
-        if idx is not None:
-            feature = _ocr.extract_feature(det_boxes[idx], img_np)
-        else:
-            # 中心无 YOLO 框(非 COCO80 类物体):退化中心固定区域提特征
-            feature = _ocr.extract_feature(CENTER_BOX, img_np)
+        feature = _ocr.extract_feature(CENTER_BOX, img_np)
+        print("[object_classify] LEARN feat=%s" %
+              ("ok" if feature is not None else "none"))  # 插桩:定位死机挂点
     except Exception as e:
-        print("[object_classify] learn det error: %s" % e)
+        print("[object_classify] learn error: %s" % e)
     if feature is not None:
         try:
             slot = _id_registry.try_register(
