@@ -26,6 +26,9 @@ from core.object_classify_lock import pick_box_at_point
 BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
+# 预览区可见边界(顶/底栏不透明,整屏框上下边会被盖住;框只画预览区)
+PREVIEW_X1 = DISPLAY_SIZE[0] - 1
+PREVIEW_Y1 = PREVIEW_Y + PREVIEW_H - 1
 BAR_BG = 0x1A1A1A
 
 # 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
@@ -100,7 +103,9 @@ _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 _selected_id = 1          # 当前选中的学习 ID 槽(底栏选项卡,KEY 注册目标)
-_record_flash = 0         # 注册成功全屏框闪烁剩余帧数(>0 时画全屏黄框)
+_record_flash = 0         # 注册成功预览区黄框闪烁剩余帧数(>0 时画框)
+_record_slot = None       # 闪烁期间要标注的已注册槽位(闪烁帧画 ID 标签)
+_record_pos = None        # 闪烁期间 ID 标签锚点(物体中心显示坐标)
 _tabs = []                # 底栏 ID 选项卡对象列表(高亮刷新用)
 
 
@@ -161,10 +166,15 @@ def on_frame(img):
     if _RUNTIME is None or _ocr is None:
         return
 
-    # 注册成功全屏框确认(闪烁若干帧,K2 学习反馈)
+    # 注册成功确认(闪烁若干帧,K2 学习反馈):预览区黄框 + 物体上方标槽位
     if _record_flash > 0:
-        img.draw_rectangle(0, 0, DISPLAY_SIZE[0], DISPLAY_SIZE[1],
+        img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
                            color=_draw_color(BOX_LOCK), thickness=6)
+        if _record_slot is not None:
+            cx, cy = _record_pos if _record_pos is not None else (320, 240)
+            img.draw_string_advanced(cx - 24, cy - 34, 24,
+                                     "ID%d" % _record_slot,
+                                     color=_draw_color(BOX_LOCK))
         _record_flash -= 1
 
     # K2 学习:按下即学画面中心物体(学完本帧返回,避免同帧双重推理)
@@ -218,8 +228,8 @@ def on_frame(img):
                 best = (i, slot, sc)
 
     if best is not None:
-        # 屏幕四边全局框(识别激活指示),左上角标命中 ID
-        img.draw_rectangle(0, 0, DISPLAY_SIZE[0] - 1, DISPLAY_SIZE[1] - 1,
+        # 预览区四边全局框(识别激活指示),左上角标命中 ID
+        img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
                            color=_draw_color(BOX_LOCK), thickness=4)
         ids = []
         for i, slot, sc in hits:
@@ -247,10 +257,11 @@ def _learn_center(img):
     """K2 学习画面中心物体:单次 det + 提中心框特征 → 注册到选中 ID 槽。
 
     中央十字对准物体后按 K2;命中(含中心点的框)才学习,中心无物体时长蜂鸣
-    提示。学习成功:全屏框闪烁确认 + 蜂鸣 + 置 _det_counter 使下一帧识别
-    首帧必推理(学习帧 on_frame 已 return,避免同帧双重推理)。
+    提示。学习成功:预览区黄框闪烁确认 + 闪烁帧标 ID 标签 + 蜂鸣 + 置
+    _det_counter 使下一帧识别首帧必推理(学习帧 on_frame 已 return,避免
+    同帧双重推理)。
     """
-    global _det_counter, _record_flash
+    global _det_counter, _record_flash, _record_slot, _record_pos
     img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
     try:
         img_np = _ai_input(img)
@@ -258,7 +269,8 @@ def _learn_center(img):
     except Exception as e:
         print("[object_classify] learn det error: %s" % e)
         det_boxes = []
-    idx = pick_box_at_point(_to_disp_boxes(det_boxes), 320, 240)
+    disp_boxes = _to_disp_boxes(det_boxes)
+    idx = pick_box_at_point(disp_boxes, 320, 240)
     if idx is not None:
         try:
             feature = _ocr.extract_feature(det_boxes[idx], img_np)
@@ -269,7 +281,10 @@ def _learn_center(img):
                 if slot is not None:
                     object_classify_db.flush_to_disk()
                     _db_features[slot] = object_classify_db.get_features().get(slot)
-                    _record_flash = RECORD_FLASH_FRAMES  # 全屏框闪烁确认
+                    _record_slot = slot
+                    x, y, w, h = disp_boxes[idx]
+                    _record_pos = (x + w // 2, y + h // 2)  # ID 标签锚点:物体中心
+                    _record_flash = RECORD_FLASH_FRAMES  # 预览区黄框闪烁确认
                     _det_counter = DET_INTERVAL - 1      # 下一帧识别首帧必推理
         except Exception as e:
             print("[object_classify] learn error: %s" % e)
