@@ -84,7 +84,8 @@ def _init_ai():
             debug_mode=0)
         _db_features = object_classify_db.init_features()
         _ai_ready = True
-        print("[object_classify] AI ready, loaded %d object(s)" % len(_db_features))
+        print("[object_classify] AI ready, input_is_packed=%s, loaded %d object(s)" % (
+            _ocr.input_is_packed, len(_db_features)))
     except Exception as e:
         print("[object_classify] _init_ai FAILED: %s" % e)
         sys.print_exception(e)
