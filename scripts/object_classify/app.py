@@ -1,8 +1,10 @@
-# scripts/object_classify/app.py — 物体分类(双 kmodel + 点击锁定 + K2 注册 4 槽 + 协议 0x0A)
+# scripts/object_classify/app.py — 物体分类学习器(双 kmodel + 5 ID 选项卡 + 点击锁定 + KEY 记录)
 #
 # 单通道(死机根治 2026-08-07,同 object_detect): AI 直接吃 chn0 显示帧,
-# det(YOLOv8n) + rec(recognition) 共用同一帧。点预览区任意物体锁定;K2
-# 注册锁定物体进 4 槽。
+# det(YOLOv8n) + rec(recognition) 共用同一帧。学习器模式(2026-08-07 用户
+# 确认):空闲态零推理(预览丝滑);点底栏 ID1~ID5 选学习目标槽;点预览区物体
+# → 单次 det+1rec 锁定;按 K2 → 注册锁定特征到选中 ID 槽 + 全屏黄框闪烁确认;
+# 锁定态每 DET_INTERVAL 帧降频推理持续识别(已学 ID%d / 未学 LOCK)。
 
 import gc
 import os
@@ -31,8 +33,13 @@ from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
 BOX_LOCK = 0xFFD700      # 锁定高亮黄框
-# 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果
-DET_INTERVAL = 2
+# 检测降频:锁定态每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框。
+# 2026-08-07 板端(object_detect 验证):2→3 降推理频率提平均帧率。
+DET_INTERVAL = 3
+# 学习 ID 上限(用户确认 2026-08-07):底栏 5 个 ID 选项卡,对齐 object_classify_db.MAX_SLOTS
+MAX_ID_TABS = 5
+# 注册成功全屏框闪烁帧数(约 0.4s @30fps):KEY 记录确认反馈
+RECORD_FLASH_FRAMES = 12
 
 
 def _draw_color(hex_color):
@@ -41,6 +48,37 @@ def _draw_color(hex_color):
     g = (hex_color >> 8) & 0xFF
     b = hex_color & 0xFF
     return (0xFF, b, g, r)
+
+
+def _ai_input(img):
+    """chn0 packed 帧 → AI 输入 img_np。
+
+    input_is_packed(ai2d 支持 RGB888p_FMT 枚举)时零拷贝直接喂 chn0 帧视图;
+    否则 NCHW(planar 语义)须 np.zeros 建 (3,H,W) 并逐通道重排(2026-08-07
+    全屏假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
+    调用方推理后须 del img_np 立即释放引用(planar 时即释放重排缓冲)。
+    """
+    img_np = img.to_numpy_ref()
+    if _ocr.input_is_packed:
+        return img_np
+    _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
+    _planar[0] = img_np[:, :, 0]
+    _planar[1] = img_np[:, :, 1]
+    _planar[2] = img_np[:, :, 2]
+    return _planar
+
+
+def _to_disp_boxes(det_boxes):
+    """检测框(rgb888p 坐标) → 显示坐标列表 [(x, y, w, h)]。"""
+    disp = []
+    for d in det_boxes:
+        l, t, r, b = int(d[0]), int(d[1]), int(d[2]), int(d[3])
+        x = l * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+        y = t * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+        w = (r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+        h = (b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+        disp.append((x, y, w, h))
+    return disp
 
 
 _RUNTIME = None
@@ -57,12 +95,15 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
-_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
+_det_counter = 0          # 检测降频计数(锁定态每 DET_INTERVAL 帧跑 NPU)
 _last_det = ([], [])      # 上轮 (det_boxes, features) 缓存
 _last_disp = []           # 上轮 disp_boxes 缓存(非检测帧画框/触摸用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
+_selected_id = 1          # 当前选中的学习 ID 槽(底栏选项卡,KEY 注册目标)
+_record_flash = 0         # 注册成功全屏框闪烁剩余帧数(>0 时画全屏黄框)
+_tabs = []                # 底栏 ID 选项卡对象列表(高亮刷新用)
 
 
 def _init_ai():
@@ -109,72 +150,64 @@ def _deinit_ai():
 
 
 def on_frame(img):
-    """chn2 检测+提特征 → 锁定跟踪或余弦匹配 → 画框 + ID 标签 → host_tick。
+    """学习器状态机:空闲零推理 / 点击单次锁定 / 锁定态降频识别 / K2 注册选中 ID。
 
-    锁定时:在检测特征里找与 _locked_feature 余弦最相似的(≥0.82),只画该框(黄+十字+
-    LOCK);低于阈值 → 锁定丢失,自动解锁。未锁定:每框 database_search,命中槽画彩框+
-    ID#,未命中白框。触摸点击命中框 → 锁定该框特征;点空白 → 解锁。K2 注册当前锁定特征。
+    空闲态(_locked_feature is None):零 NPU 推理,纯预览 + 绿十字,30fps 丝滑。
+    点击预览区 → _click_lock 单次 det+1rec 锁定命中物体;锁定态每 DET_INTERVAL
+    帧跑 det+rec,select_lock_index 跟踪锁定物体(已学显示 ID%d,未学 LOCK);
+    锁定丢失/点空白回空闲。K2(锁定态) → register_at 注册锁定特征到
+    _selected_id 槽,置 _record_flash 全屏黄框闪烁确认。单通道(AI 吃 chn0 帧)。
     """
-    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots, _last_names
+    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots, _last_names, _record_flash
     if _RUNTIME is None or _ocr is None:
         return
+
+    # 注册成功全屏框确认(闪烁若干帧,KEY 记录反馈)
+    if _record_flash > 0:
+        img.draw_rectangle(0, 0, DISPLAY_SIZE[0], DISPLAY_SIZE[1],
+                           color=_draw_color(BOX_LOCK), thickness=6)
+        _record_flash -= 1
+
+    slots = []   # 列表化:统一上限 25,order_slots 按屏幕位置排序
+    names = []   # 名称帧(类型 0x0E):[(id, 名称)],已注册目标用 obj<槽号> 标识
+
+    if _locked_feature is None:
+        # ── 空闲态:零推理,纯预览(30fps 丝滑) ──
+        if _pending_click is not None:
+            px, py = _pending_click
+            _pending_click = None
+            _click_lock(img, px, py)
+        # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
+        img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+        if _RUNTIME is not None and _RUNTIME.host is not None:
+            _RUNTIME.host_tick(slots, names)
+        return
+
+    # ── 锁定态:降频推理 + 特征跟踪 ──
     det_boxes, features = _last_det
     disp_boxes = _last_disp
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
         # 单通道(死机根治 2026-08-07):AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争
-        img_np = img.to_numpy_ref()
-        # packed RGB888 -> planar CHW: ai2d 若支持 packed 输入枚举(RGB888p_FMT)
-        # 则零拷贝直接喂,否则 NCHW(planar 语义)须逐通道重排(2026-08-07 全屏
-        # 假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
-        if not _ocr.input_is_packed:
-            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-            _planar[0] = img_np[:, :, 0]
-            _planar[1] = img_np[:, :, 1]
-            _planar[2] = img_np[:, :, 2]
-            img_np = _planar
+        img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
         try:
+            img_np = _ai_input(img)
             det_boxes, features = _ocr.run(img_np)
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
         _last_det = (det_boxes, features)
         # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
-        if not _ocr.input_is_packed:
-            del _planar
-        del img_np
+        if img_np is not None:
+            del img_np
         gc.collect()
         # 检测框(rgb888p) → 显示坐标(VGA)
-        disp_boxes = []
-        for d in det_boxes:
-            l, t, r, b = int(d[0]), int(d[1]), int(d[2]), int(d[3])
-            x = l * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-            y = t * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            w = (r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-            h = (b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            disp_boxes.append((x, y, w, h))
+        disp_boxes = _to_disp_boxes(det_boxes)
         _last_disp = disp_boxes
 
-    slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
-    names = []   # 名称帧(类型 0x0E):[(id, 名称)],已注册目标用 obj<槽号> 标识
-    filled = set()
-
-    # 触摸点击处理(优先,可能改变锁定态)
-    if _pending_click is not None:
-        px, py = _pending_click
-        _pending_click = None
-        idx = pick_box_at_point(disp_boxes, px, py)
-        if idx is not None and idx < len(features):
-            # 拷成 plain list 跨帧持有(避 ulab ndarray 缓冲被 NPU 复用)
-            _locked_feature = to_feature_list(features[idx])
-            if _RUNTIME.buzzer is not None:
-                _RUNTIME.buzzer.beep(ms=50)
-        else:
-            _locked_feature = None  # 点空白 → 解锁
-
+    # 锁定目标跟踪:特征余弦逐帧匹配(≥0.82),命中画黄框+十字,否则解锁回空闲
     if _locked_feature is not None:
-        # 锁定模式:特征余弦逐帧匹配锁定目标
         idx, score = select_lock_index(_locked_feature, features)
         if idx is not None and idx < len(disp_boxes):
             x, y, w, h = disp_boxes[idx]
@@ -193,40 +226,37 @@ def on_frame(img):
                 img.draw_string_advanced(x + 2, y - 24, 24, "LOCK", color=color)
                 slots.append((0, x, y, w, h, conf))  # id=0 锁定但未注册(learned=0)
         else:
-            # 锁定丢失:目标离开画面/被遮挡 → 自动解锁
+            # 锁定丢失:目标离开画面/被遮挡 → 自动解锁回空闲(零推理)
             _locked_feature = None
 
-    if _locked_feature is None:
-        # 未锁定模式:每框余弦匹配 DB
-        for i, feat in enumerate(features):
-            x, y, w, h = disp_boxes[i]
-            slot, sc = database_search(feat, _db_features)
-            if slot is not None and slot not in filled:
-                color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
-                img.draw_rectangle(x, y, w, h, color=color, thickness=4)
-                img.draw_string_advanced(x + 2, y - 24, 24,
-                                         "ID%d" % slot, color=color)
-                slots.append((slot, x, y, w, h, int(sc * 100) | LEARNED_FLAG))  # 已学习:bit7=1
-                names.append((slot, "obj%d" % slot))
-                filled.add(slot)
-            else:
-                color = _draw_color(BOX_UNKNOWN)
-                img.draw_rectangle(x, y, w, h, color=color, thickness=2)
-                img.draw_string_advanced(x + 2, y - 24, 24, "object", color=color)
+    # 触摸:点空白解锁回空闲 / 点中其它框换锁(仅锁定态消费)
+    if _pending_click is not None:
+        px, py = _pending_click
+        _pending_click = None
+        idx = pick_box_at_point(disp_boxes, px, py)
+        if idx is None:
+            _locked_feature = None
+        elif idx < len(features) and _locked_feature is not None:
+            # 拷成 plain list 跨帧持有(避 ulab ndarray 缓冲被 NPU 复用)
+            _locked_feature = to_feature_list(features[idx])
+            _det_counter = DET_INTERVAL - 1  # 换锁后首帧必推理(同点击锁定,防旧帧特征匹配闪丢)
+            if _RUNTIME.buzzer is not None:
+                _RUNTIME.buzzer.beep(ms=50)
 
     # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
-    # K2 注册:当前锁定物体特征进空槽(复用 IdRegistry 的 K2 边沿/超时/蜂鸣)
-    if _id_registry is not None and _id_registry.has_pending() \
-            and _locked_feature is not None:
+    # K2 注册:锁定特征进选中 ID 槽(register_at,底栏选项卡决定 _selected_id)
+    if _id_registry is not None and _locked_feature is not None \
+            and _id_registry.has_pending():
         try:
             slot = _id_registry.try_register(
                 _locked_feature, _RUNTIME.buzzer,
-                registrar=object_classify_db.register)
+                registrar=lambda f: object_classify_db.register_at(f, _selected_id))
             if slot is not None:
                 object_classify_db.flush_to_disk()
                 _db_features[slot] = object_classify_db.get_features().get(slot)
+                _record_flash = RECORD_FLASH_FRAMES  # 全屏框闪烁确认
         except Exception as e:
             print("[object_classify] register error: %s" % e)
 
@@ -239,6 +269,37 @@ def on_frame(img):
         _last_names = names
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots, names)
+
+
+def _click_lock(img, px, py):
+    """点击单次推理:det 全帧 + 仅命中框提 1 次特征(交互响应快 ~60ms)。
+
+    命中 → _locked_feature(plain list) + 蜂鸣 + 置 _det_counter 使下一帧必推理
+    (锁定态首帧即全框特征匹配);未命中/无框 → 保持空闲(零推理)。
+    """
+    global _locked_feature, _det_counter
+    img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
+    try:
+        img_np = _ai_input(img)
+        det_boxes = _ocr.detector.run(img_np)
+    except Exception as e:
+        print("[object_classify] click det error: %s" % e)
+        det_boxes = []
+    disp_boxes = _to_disp_boxes(det_boxes)
+    idx = pick_box_at_point(disp_boxes, px, py)
+    if idx is not None and idx < len(det_boxes):
+        try:
+            feature = _ocr.extract_feature(det_boxes[idx], img_np)
+            if feature is not None:
+                _locked_feature = to_feature_list(feature)
+                if _RUNTIME.buzzer is not None:
+                    _RUNTIME.buzzer.beep(ms=50)
+                _det_counter = DET_INTERVAL - 1  # 下一帧锁定态首帧必推理
+        except Exception as e:
+            print("[object_classify] click lock error: %s" % e)
+    if img_np is not None:
+        del img_np
+    gc.collect()
 
 
 def _on_preview_clicked(e):
@@ -340,6 +401,27 @@ def _process_overlay_close():
     _clear_btn = None
     _save_btn = None
     _overlay = None
+
+
+def _on_tab_clicked(e, sid):
+    """点 ID 选项卡:设 _selected_id(KEY 注册目标槽) + 刷新高亮 + 蜂鸣。"""
+    global _selected_id
+    if e.get_code() != lv.EVENT.CLICKED:
+        return
+    _selected_id = sid
+    _refresh_tabs()
+    if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+        _RUNTIME.buzzer.beep(ms=50)
+
+
+def _refresh_tabs():
+    """按 _selected_id 刷新选项卡高亮(选中按 ID 槽色,未选深灰)。"""
+    for i, tab in enumerate(_tabs):
+        sid = i + 1
+        if sid == _selected_id:
+            tab.set_style_bg_color(lv.color_hex(BOX_COLORS.get(sid, BOX_UNKNOWN)), 0)
+        else:
+            tab.set_style_bg_color(lv.color_hex(0x2A2A2A), 0)
 
 
 def _build_ui(runtime, exit_flag):
@@ -456,14 +538,37 @@ def _build_ui(runtime, exit_flag):
         list_lbl.center()
     list_btn.add_event(_on_list_clicked, lv.EVENT.CLICKED, None)
 
+    # 5 个 ID 选项卡(底栏中部):点选学习目标 ID,选中高亮按 ID 槽色
+    global _tabs
+    _tabs = []
+    tab_w = 72
+    tab_gap = 6
+    for i in range(1, MAX_ID_TABS + 1):
+        tab = lv.btn(_bottom_bar)
+        tab.set_size(tab_w, 40)
+        tab.align(lv.ALIGN.LEFT_MID, 60 + (i - 1) * (tab_w + tab_gap), 0)
+        tab.set_style_bg_opa(255, 0)
+        tab.set_style_radius(8, 0)
+        tab.set_style_border_width(0, 0)
+        tab.set_style_pad_all(0, 0)
+        tab_lbl = lv.label(tab)
+        tab_lbl.set_text("ID%d" % i)
+        tab_lbl.add_style(make_back_bar_text_style(fonts.body), 0)
+        tab_lbl.center()
+        tab.add_event(lambda e, sid=i: _on_tab_clicked(e, sid), lv.EVENT.CLICKED, None)
+        _tabs.append(tab)
+    _refresh_tabs()
+
     # 底栏计数(已学习 x/x)已按用户要求去掉
 
 
 def _destroy_ui():
     """Delete LVGL objects and restore screen opacity for the menu."""
     global _screen, _top_bar, _bottom_bar, _preview
-    global _overlay, _clear_btn, _save_btn
-    for obj in (_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview):
+    global _overlay, _clear_btn, _save_btn, _tabs
+    objs = [_overlay, _clear_btn, _save_btn, _top_bar, _bottom_bar, _preview]
+    objs.extend(_tabs)
+    for obj in objs:
         if obj is not None:
             try:
                 obj.delete()
@@ -472,6 +577,7 @@ def _destroy_ui():
     _overlay = None
     _clear_btn = None
     _save_btn = None
+    _tabs = []
     _top_bar = None
     _bottom_bar = None
     _preview = None

@@ -13,6 +13,10 @@ from core import db_store
 
 OBJECT_CLASSIFY_DB_PATH = "/sdcard/CamerAi/data/object_classify_db.json"
 
+# 学习 ID 上限(用户确认 2026-08-07):底栏 5 个 ID 选项卡,注册只进 1..5。
+# 老数据槽 >5 仍可读(加载不截断),新注册/轮转只写 1..5。
+MAX_SLOTS = 5
+
 # 默认匹配阈值(score=cos/2+0.5 映射后)。0.82 ⇒ cos≥0.64,对齐 face_db 修复。
 # ⚠️ 勿用 0.5:0.5 ⇒ cos≥0,CNN 自然图像特征几乎总正相关 → 所有目标命中同一 ID。
 OBJECT_CLASSIFY_MATCH_THRESHOLD = 0.82
@@ -88,30 +92,46 @@ class _ObjectClassifyDB:
 
     def __init__(self):
         self._features = {}        # {slot_id: list}
-        self._next_slot = 1        # 轮转覆盖指针(1-25 循环)
+        self._next_slot = 1        # 轮转覆盖指针(1-MAX_SLOTS 循环)
         self._dirty = False
         self._clear_dirty = False
 
     def register(self, feature):
-        """注册 feature 到槽位(轮转覆盖)。返回 slot_id(1-4)。纯内存,设 _dirty。
+        """注册 feature 到槽位(轮转覆盖)。返回 slot_id(1-MAX_SLOTS)。纯内存,设 _dirty。
 
-        空槽优先(不推进 _next_slot);无空槽覆盖 _next_slot 并推进(1→2→3→4→1)。
+        空槽优先(不推进 _next_slot);无空槽覆盖 _next_slot 并推进。
         feature 转 plain list 存储(避 ulab ndarray 不可 JSON 序列化)。
         """
         feat = _to_list(feature)
         slot = None
-        for i in range(1, 26):
+        for i in range(1, MAX_SLOTS + 1):
             if i not in self._features:
                 slot = i
                 break
         if slot is None:
             slot = self._next_slot
-            self._next_slot = self._next_slot % 25 + 1
+            self._next_slot = self._next_slot % MAX_SLOTS + 1
         self._features[slot] = feat
         self._dirty = True
         self._clear_dirty = False
         print("[ObjectClassifyDB] registered feature(%d-dim) -> id%d (memory, dirty)" % (len(feat), slot))
         return slot
+
+    def register_at(self, feature, slot_id):
+        """注册 feature 到指定槽位(底栏 ID 选项卡选中槽),覆盖已有。
+
+        返回 slot_id;槽位越界(非 1..MAX_SLOTS)拒绝并返回 None。
+        纯内存,设 _dirty(同 register)。
+        """
+        if not (1 <= slot_id <= MAX_SLOTS):
+            print("[ObjectClassifyDB] register_at rejected slot %s (out of 1..%d)" % (slot_id, MAX_SLOTS))
+            return None
+        feat = _to_list(feature)
+        self._features[slot_id] = feat
+        self._dirty = True
+        self._clear_dirty = False
+        print("[ObjectClassifyDB] registered feature(%d-dim) -> id%d (memory, dirty)" % (len(feat), slot_id))
+        return slot_id
 
     def get_features(self):
         """返回特征字典的引用(运行时匹配用)。"""

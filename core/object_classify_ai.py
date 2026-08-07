@@ -64,7 +64,6 @@ class FeatureExtractionApp(AIBase):
         self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, det_box, input_image_size=None):
-        gc.collect()
         with ScopedTiming("set preprocess config", self.debug_mode > 0):
             ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
             self.crop_params = self._get_crop_param(det_box)
@@ -159,6 +158,7 @@ class ObjectClassifyRecognition:
         feat_res: [feature_vec, ...] 每个物体的特征向量(同索引对应)。
         过滤:过小框(<2px)跳过(避提特征崩)。
         """
+        gc.collect()  # 每检测帧 1 次全堆回收(替代每框 config_preprocess 多次,性能 2026-08-07)
         det_boxes = self.detector.run(img_np)
         det_res = []
         feat_res = []
@@ -178,6 +178,19 @@ class ObjectClassifyRecognition:
             det_res.append(d)
             feat_res.append(feature)
         return det_res, feat_res
+
+    def extract_feature(self, det_box, img_np):
+        """对单个检测框提特征(点击锁定用,1 次 recognition 推理,交互响应快)。
+
+        det_box: [l,t,r,b,score,class_id](object_ai 检测框格式)。
+        过小框(<2px)返回 None(同 run 过滤)。
+        """
+        l, t, r, b = int(det_box[0]), int(det_box[1]), int(det_box[2]), int(det_box[3])
+        if r - l < 2 or b - t < 2:
+            return None  # 过小框跳过
+        gc.collect()
+        self.feature.config_preprocess((l, t, r, b))
+        return self.feature.run(img_np)
 
     def deinit(self):
         try:

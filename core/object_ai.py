@@ -104,9 +104,10 @@ class ObjectDetectionApp(AIBase):
             inds_ori = np.argmax(scores_ori, axis=-1)
 
             # 向量化预算所有候选的 lbrt(8400 行一次性算),避免在 Python 循环里逐个做浮点。
-            # ulab 不支持 fancy indexing(arr[mask]),故仍用 Python 循环筛选,但循环体
-            # 只做"过阈则取预算值"的轻量取值,不再逐个算 xywh->lbrt 浮点。
-            # ⚠️ ulab ndarray 无 .astype() ,int 转换在取值时用 int() 完成。
+            # 阈值筛选:ulab 标量索引每次建对象极慢(8400 候选循环卡顿主因,2026-08-07),
+            # 先把 conf/class 批量转 Python list(C 层批量拷贝),循环只做 list 索引;
+            # 过阈的才取预算 lbrt(int() 转换)。ulab 不支持 fancy indexing(arr[mask]),
+            # 故仍 Python 循环,但循环体为轻量取值。⚠️ ulab ndarray 无 .astype()。
             xs = boxes_ori[:, 0]
             ys = boxes_ori[:, 1]
             ws = boxes_ori[:, 2]
@@ -116,12 +117,14 @@ class ObjectDetectionApp(AIBase):
             rights = (xs + 0.5 * ws) * self.x_factor
             bottoms = (ys + 0.5 * hs) * self.y_factor
 
+            confs_list = confs_ori.tolist()
+            inds_list = inds_ori.tolist()
             boxes, scores, inds = [], [], []
-            n = len(confs_ori)
+            n = len(confs_list)
             for i in range(n):
-                if confs_ori[i] > self.confidence_threshold:
-                    scores.append(confs_ori[i])
-                    inds.append(inds_ori[i])
+                if confs_list[i] > self.confidence_threshold:
+                    scores.append(confs_list[i])
+                    inds.append(inds_list[i])
                     boxes.append([int(lefts[i]), int(tops[i]),
                                   int(rights[i]), int(bottoms[i])])
             if len(boxes) == 0:
