@@ -29,6 +29,9 @@ PREVIEW_H = 376
 # 预览区可见边界(顶/底栏不透明,整屏框上下边会被盖住;框只画预览区)
 PREVIEW_X1 = DISPLAY_SIZE[0] - 1
 PREVIEW_Y1 = PREVIEW_Y + PREVIEW_H - 1
+# 中心退化区域(224×224,VGA 画面中心):YOLO(COCO80)未检到时学习/识别退化用,
+# 任意物体对准中央即可学/识别,不受类别限制(2026-08-07 用户反馈)
+CENTER_BOX = [208, 128, 432, 352]
 BAR_BG = 0x1A1A1A
 
 # 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
@@ -87,7 +90,7 @@ def _to_disp_boxes(det_boxes):
 def _draw_preview_box(img, color, thickness):
     """画预览区四边框,底部内收 thickness:线宽向边界外扩,底边外扩
     部分落在底栏(428 起不透明)内被盖住→底部线看不见(2026-08-07)。"""
-    img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1 - thickness,
+    img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1 - thickness + 1,
                        color=color, thickness=thickness)
 
 
@@ -210,6 +213,12 @@ def on_frame(img):
         try:
             img_np = _ai_input(img)
             det_boxes, features = _ocr.run(img_np)
+            if not det_boxes:
+                # YOLO 未检到(非 COCO80 类物体):退化中心区域提特征,任意已学物体可识别
+                center_feat = _ocr.extract_feature(CENTER_BOX, img_np)
+                if center_feat is not None:
+                    det_boxes = [list(CENTER_BOX) + [1.0, 0]]
+                    features = [center_feat]
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
@@ -259,41 +268,42 @@ def on_frame(img):
 
 
 def _learn_center(img):
-    """K2 学习画面中心物体:单次 det + 提中心框特征 → 注册到选中 ID 槽。
-
-    中央十字对准物体后按 K2;命中(含中心点的框)才学习,中心无物体时长蜂鸣
-    提示。学习成功:预览区黄框闪烁确认 + 闪烁帧标 ID 标签 + 蜂鸣 + 置
-    _det_counter 使下一帧识别首帧必推理(学习帧 on_frame 已 return,避免
-    同帧双重推理)。
+    """K2 学习画面中心物体:先 YOLO 命中中心框提特征,无框时退化中心
+    固定区域提特征——任意物体对准中央即可学,不受 COCO80 类别限制。
+    学习成功:预览区槽位色框闪烁确认 + 左上角 ID + 蜂鸣 + 置 _det_counter
+    使下一帧识别首帧必推理(学习帧 on_frame 已 return,避免同帧双重推理)。
     """
     global _det_counter, _record_flash, _record_slot
     img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
+    feature = None
     try:
         img_np = _ai_input(img)
         det_boxes = _ocr.detector.run(img_np)
+        disp_boxes = _to_disp_boxes(det_boxes)
+        idx = pick_box_at_point(disp_boxes, 320, 240)
+        if idx is not None:
+            feature = _ocr.extract_feature(det_boxes[idx], img_np)
+        else:
+            # 中心无 YOLO 框(非 COCO80 类物体):退化中心固定区域提特征
+            feature = _ocr.extract_feature(CENTER_BOX, img_np)
     except Exception as e:
         print("[object_classify] learn det error: %s" % e)
-        det_boxes = []
-    disp_boxes = _to_disp_boxes(det_boxes)
-    idx = pick_box_at_point(disp_boxes, 320, 240)
-    if idx is not None:
+    if feature is not None:
         try:
-            feature = _ocr.extract_feature(det_boxes[idx], img_np)
-            if feature is not None:
-                slot = _id_registry.try_register(
-                    feature, _RUNTIME.buzzer,
-                    registrar=lambda f: object_classify_db.register_at(f, _selected_id))
-                if slot is not None:
-                    object_classify_db.flush_to_disk()
-                    _db_features[slot] = object_classify_db.get_features().get(slot)
-                    _record_slot = slot
-                    _record_flash = RECORD_FLASH_FRAMES  # 预览区槽位色框闪烁确认
-                    _det_counter = DET_INTERVAL - 1      # 下一帧识别首帧必推理
+            slot = _id_registry.try_register(
+                feature, _RUNTIME.buzzer,
+                registrar=lambda f: object_classify_db.register_at(f, _selected_id))
+            if slot is not None:
+                object_classify_db.flush_to_disk()
+                _db_features[slot] = object_classify_db.get_features().get(slot)
+                _record_slot = slot
+                _record_flash = RECORD_FLASH_FRAMES  # 预览区槽位色框闪烁确认
+                _det_counter = DET_INTERVAL - 1      # 下一帧识别首帧必推理
         except Exception as e:
             print("[object_classify] learn error: %s" % e)
     else:
         if _RUNTIME is not None and _RUNTIME.buzzer is not None:
-            _RUNTIME.buzzer.beep(ms=200)  # 中心无物体,学习失败提示
+            _RUNTIME.buzzer.beep(ms=200)  # 提特征失败,学习失败提示
     if img_np is not None:
         del img_np
     gc.collect()
