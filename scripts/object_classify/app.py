@@ -216,7 +216,6 @@ def on_frame(img):
                 features = [feat]
             else:
                 det_boxes, features = [], []
-            print("[object_classify] DET n=%d" % len(det_boxes))  # 插桩:定位死机挂点
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
@@ -237,8 +236,6 @@ def on_frame(img):
             hits.append((i, slot, sc))
             if best is None or sc > best[2]:
                 best = (i, slot, sc)
-    if do_det:
-        print("[object_classify] MATCH hits=%d" % len(hits))  # 插桩:定位死机挂点
 
     if best is not None:
         # 预览区四边全局框(识别激活指示),框色 = 最佳命中槽位色
@@ -255,8 +252,6 @@ def on_frame(img):
             label_x += len(tag) * 24 + 8
     # 十字架固定屏幕中央不动(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
-    if do_det:
-        print("[object_classify] DRAW")  # 插桩:定位死机挂点
 
     # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
     if not do_det and _last_slots is not None:
@@ -267,8 +262,6 @@ def on_frame(img):
         _last_names = names
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots, names)
-    if do_det:
-        print("[object_classify] TICKED")  # 插桩:定位死机挂点
 
 
 def _learn_center(img):
@@ -284,8 +277,6 @@ def _learn_center(img):
     try:
         img_np = _ai_input(img)
         feature = _ocr.extract_feature(CENTER_BOX, img_np)
-        print("[object_classify] LEARN feat=%s" %
-              ("ok" if feature is not None else "none"))  # 插桩:定位死机挂点
     except Exception as e:
         print("[object_classify] learn error: %s" % e)
     if feature is not None:
