@@ -35,8 +35,7 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-BOX_LOCK = 0xFFD700      # 学习确认闪烁黄框
-BOX_ACTIVE = 0xFFFFFF    # 识别激活白色全局框(命中已学物体时预览区白框,用户确认)
+# 框/ID 颜色均按槽位取色(1~4 历史色 + 5~25 色环),学习 ID 不用白色
 # 检测降频:锁定态每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框。
 # 2026-08-07 板端(object_detect 验证):2→3 降推理频率提平均帧率。
 DET_INTERVAL = 3
@@ -104,9 +103,8 @@ _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口写空库(防断电重启旧数据回魂)
 _selected_id = 1          # 当前选中的学习 ID 槽(底栏选项卡,KEY 注册目标)
-_record_flash = 0         # 注册成功预览区黄框闪烁剩余帧数(>0 时画框)
-_record_slot = None       # 闪烁期间要标注的已注册槽位(闪烁帧画 ID 标签)
-_record_pos = None        # 闪烁期间 ID 标签锚点(物体中心显示坐标)
+_record_flash = 0         # 注册成功预览区闪烁剩余帧数(>0 时画框+左上角 ID)
+_record_slot = None       # 闪烁期间要标注的已注册槽位(框与 ID 均用槽位色)
 _tabs = []                # 底栏 ID 选项卡对象列表(高亮刷新用)
 
 
@@ -167,15 +165,14 @@ def on_frame(img):
     if _RUNTIME is None or _ocr is None:
         return
 
-    # 注册成功确认(闪烁若干帧,K2 学习反馈):预览区黄框 + 物体上方标槽位
+    # 注册成功确认(闪烁若干帧,K2 学习反馈):预览区槽位色框 + 左上角槽位色 ID
     if _record_flash > 0:
+        flash_color = _draw_color(BOX_COLORS.get(_record_slot, BOX_UNKNOWN))
         img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
-                           color=_draw_color(BOX_LOCK), thickness=6)
+                           color=flash_color, thickness=6)
         if _record_slot is not None:
-            cx, cy = _record_pos if _record_pos is not None else (320, 240)
-            img.draw_string_advanced(cx - 24, cy - 34, 24,
-                                     "ID%d" % _record_slot,
-                                     color=_draw_color(BOX_LOCK))
+            tag = "ID%d" % _record_slot
+            img.draw_string_advanced(8, PREVIEW_Y + 4, 24, tag, color=flash_color)
         _record_flash -= 1
 
     # K2 学习:按下即学画面中心物体(学完本帧返回,避免同帧双重推理)
@@ -229,9 +226,9 @@ def on_frame(img):
                 best = (i, slot, sc)
 
     if best is not None:
-        # 预览区四边白色全局框(识别激活指示,顶/底栏外不可见)
+        # 预览区四边全局框(识别激活指示),框色 = 最佳命中槽位色
         img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
-                           color=_draw_color(BOX_ACTIVE), thickness=4)
+                           color=_draw_color(BOX_COLORS.get(best[1], BOX_UNKNOWN)), thickness=4)
         label_x = 8
         for i, slot, sc in hits:
             x, y, w, h = disp_boxes[i]
@@ -264,7 +261,7 @@ def _learn_center(img):
     _det_counter 使下一帧识别首帧必推理(学习帧 on_frame 已 return,避免
     同帧双重推理)。
     """
-    global _det_counter, _record_flash, _record_slot, _record_pos
+    global _det_counter, _record_flash, _record_slot
     img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
     try:
         img_np = _ai_input(img)
@@ -285,9 +282,7 @@ def _learn_center(img):
                     object_classify_db.flush_to_disk()
                     _db_features[slot] = object_classify_db.get_features().get(slot)
                     _record_slot = slot
-                    x, y, w, h = disp_boxes[idx]
-                    _record_pos = (x + w // 2, y + h // 2)  # ID 标签锚点:物体中心
-                    _record_flash = RECORD_FLASH_FRAMES  # 预览区黄框闪烁确认
+                    _record_flash = RECORD_FLASH_FRAMES  # 预览区槽位色框闪烁确认
                     _det_counter = DET_INTERVAL - 1      # 下一帧识别首帧必推理
         except Exception as e:
             print("[object_classify] learn error: %s" % e)
