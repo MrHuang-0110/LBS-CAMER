@@ -128,22 +128,23 @@ def on_frame(img):
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
         # img 持有至 show_image。
         img_np = img.to_numpy_ref()
-        # packed RGB888 -> planar CHW (3,H,W): ai2d 声明 NCHW_FMT(与
-        # Sensor.RGBP888 planar 同义),直接喂 packed 会按平面错读导致全屏
-        # 假框(2026-08-07 板端日志 det0=[1,1,630,478] 根因)。逐通道重排;
-        # ai2d build 声明 [1,3,H,W],此处喂省略 batch=1 的 (3,H,W)。
-        _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-        _planar[0] = img_np[:, :, 0]
-        _planar[1] = img_np[:, :, 1]
-        _planar[2] = img_np[:, :, 2]
-        img_np = _planar
+        # packed RGB888 -> planar CHW: ai2d 若支持 packed 输入枚举(RGB888p_FMT)
+        # 则零拷贝直接喂,否则 NCHW(planar 语义)须逐通道重排(2026-08-07 全屏
+        # 假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
+        if not _object_det.input_is_packed:
+            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
+            _planar[0] = img_np[:, :, 0]
+            _planar[1] = img_np[:, :, 1]
+            _planar[2] = img_np[:, :, 2]
+            img_np = _planar
         try:
             dets = _object_det.run(img_np)
         except Exception as e:
             print("[object_detect] run error: %s" % e)
             dets = []
         # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
-        del _planar
+        if not _object_det.input_is_packed:
+            del _planar
         del img_np
         gc.collect()
         # 每类别取面积最大实例

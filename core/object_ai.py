@@ -70,7 +70,13 @@ class ObjectDetectionApp(AIBase):
         self.x_factor = float(self.rgb888p_size[0]) / self.model_input_size[0]
         self.y_factor = float(self.rgb888p_size[1]) / self.model_input_size[1]
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
+        # 输入格式探测:优先 ai2d packed RGB888 枚举(RGB888p_FMT,K230 中
+        # p=packed,与 Sensor.RGBP888 的 P=planar 命名相反),支持则 chn0
+        # 帧零拷贝直接喂;否则 NCHW(planar 语义)须软件重排(2026-08-07
+        # 全屏假框根因)。
+        self.input_is_packed = hasattr(nn.ai2d_format, "RGB888p_FMT")
+        _input_fmt = getattr(nn.ai2d_format, "RGB888p_FMT", nn.ai2d_format.NCHW_FMT)
+        self.ai2d.set_ai2d_dtype(_input_fmt, nn.ai2d_format.NCHW_FMT,
                                  np.uint8, np.uint8)
 
     def config_preprocess(self, input_image_size=None):
