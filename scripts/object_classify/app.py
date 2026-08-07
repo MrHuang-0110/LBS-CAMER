@@ -213,12 +213,7 @@ def on_frame(img):
         try:
             img_np = _ai_input(img)
             det_boxes, features = _ocr.run(img_np)
-            if not det_boxes:
-                # YOLO 未检到(非 COCO80 类物体):退化中心区域提特征,任意已学物体可识别
-                center_feat = _ocr.extract_feature(CENTER_BOX, img_np)
-                if center_feat is not None:
-                    det_boxes = [list(CENTER_BOX) + [1.0, 0]]
-                    features = [center_feat]
+            print("[object_classify] DET n=%d" % len(det_boxes))  # 插桩:定位死机挂点
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
@@ -281,6 +276,7 @@ def _learn_center(img):
         det_boxes = _ocr.detector.run(img_np)
         disp_boxes = _to_disp_boxes(det_boxes)
         idx = pick_box_at_point(disp_boxes, 320, 240)
+        print("[object_classify] LEARN det n=%d" % len(det_boxes))  # 插桩:定位死机挂点
         if idx is not None:
             feature = _ocr.extract_feature(det_boxes[idx], img_np)
         else:

@@ -166,6 +166,7 @@ class ObjectClassifyRecognition:
             n = len(det_boxes)
         except Exception:
             n = 0
+        print("[objcls] run det n=%d" % n)  # 插桩:定位死机挂点
         for i in range(n):
             if i >= self.max_boxes:
                 break
@@ -177,6 +178,7 @@ class ObjectClassifyRecognition:
             feature = self.feature.run(img_np)
             det_res.append(d)
             feat_res.append(feature)
+        print("[objcls] run feat done")  # 插桩:定位死机挂点
         return det_res, feat_res
 
     def extract_feature(self, det_box, img_np):
@@ -189,8 +191,11 @@ class ObjectClassifyRecognition:
         if r - l < 2 or b - t < 2:
             return None  # 过小框跳过
         gc.collect()
+        print("[objcls] extract start")  # 插桩:定位死机挂点
         self.feature.config_preprocess((l, t, r, b))
-        return self.feature.run(img_np)
+        out = self.feature.run(img_np)
+        print("[objcls] extract done")  # 插桩:定位死机挂点
+        return out
 
     def deinit(self):
         try:
