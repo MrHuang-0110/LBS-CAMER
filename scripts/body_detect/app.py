@@ -27,7 +27,8 @@ PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 
 # 检测降频:每 DET_INTERVAL 帧跑一次 NPU(非检测帧用缓存骨架画,减 DMA/NPU 竞争)
-DET_INTERVAL = 2
+# 2026-08-07 板端反馈卡顿: 2→3(同 object_detect 提平均帧率)
+DET_INTERVAL = 3
 
 _RUNTIME = None
 _screen = None
@@ -72,7 +73,7 @@ def _deinit_ai():
 
 
 def _clamp(v, lo, hi):
-    """坐标夹取到可视区,防 draw 越界挂死(坑:draw_rectangle 越界致死机)。"""
+    """坐标夹取到可视区,防绘制越界挂死(坑:K230 绘制越界致死机)。"""
     if v < lo:
         return lo
     if v > hi:
@@ -81,18 +82,12 @@ def _clamp(v, lo, hi):
 
 
 def _draw_skeleton(img, boxes, kpses):
-    """画人体框 + 17 关键点圆 + 19 骨骼线(坐标 1:1,chn0 VGA = 显示 VGA)。"""
+    """画骨骼:17 关键点圆 + 19 骨骼线(坐标 1:1,chn0 VGA = 显示 VGA)。
+
+    只画骨架不画人体框(2026-08-07 用户确认);boxes 仅作 kpses 索引。
+    """
     for i in range(len(boxes)):
-        try:
-            l, t, r, b = [float(v) for v in boxes[i][:4]]
-        except Exception:
-            continue
         kps = kpses[i] if i < len(kpses) else []
-        x = _clamp(int(l), 0, DISPLAY_SIZE[0] - 1)
-        y = _clamp(int(t), 0, DISPLAY_SIZE[1] - 1)
-        w = _clamp(int(r - l), 1, DISPLAY_SIZE[0] - x)
-        h = _clamp(int(b - t), 1, DISPLAY_SIZE[1] - y)
-        img.draw_rectangle(x, y, w, h, color=(0xFF, 0xFF, 0xFF, 0xFF), thickness=2)
         # aidemo 返回 COCO 17 关键点(坐标+score);demo 的 range(17+2) 是画
         # 19 条骨骼线,不是 19 个点——只要求 17 点,否则整人跳过只剩框
         if len(kps) < 17:
@@ -149,17 +144,20 @@ def on_frame(img):
         kpses = res[1] or []
         _last_pose = (boxes, kpses)
         # 槽位:id = 按 (x,y) 升序后的目标序号(最左=1),learned 恒 0
+        # aidemo 人体框可能只有 4 元 [l,t,r,b] 无 score → 缺省 conf=100
         items = []
         for i in range(len(boxes)):
             try:
-                l, t, r, b, score = [float(v) for v in boxes[i][:5]]
+                bbox = [float(v) for v in boxes[i][:4]]
+                l, t, r, b = bbox
+                conf = int(float(boxes[i][4]) * 100) if len(boxes[i]) >= 5 else 100
             except Exception:
                 continue
             x = int(l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
             y = int(t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
             w = int(r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
             h = int(b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            items.append((x, y, w, h, int(score * 100)))
+            items.append((x, y, w, h, conf))
         items.sort(key=lambda t: (t[0], t[1]))
         slots = [(i + 1, x, y, w, h, conf)
                  for i, (x, y, w, h, conf) in enumerate(items)]
