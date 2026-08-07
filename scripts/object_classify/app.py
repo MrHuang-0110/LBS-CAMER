@@ -26,11 +26,8 @@ from core.object_classify_lock import pick_box_at_point
 BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
-# 预览区可见边界(顶/底栏不透明,整屏框上下边会被盖住;框只画预览区)
-PREVIEW_X1 = DISPLAY_SIZE[0] - 1
-PREVIEW_Y1 = PREVIEW_Y + PREVIEW_H - 1
-# 中心退化区域(224×224,VGA 画面中心):YOLO(COCO80)未检到时学习/识别退化用,
-# 任意物体对准中央即可学/识别,不受类别限制(2026-08-07 用户反馈)
+# 中心退化区域(224×224,VGA 画面中心):YOLO(COCO80)未检到时学习退化用,
+# 任意物体对准中央即可学,不受类别限制(2026-08-07 用户反馈)
 CENTER_BOX = [208, 128, 432, 352]
 BAR_BG = 0x1A1A1A
 
@@ -88,9 +85,10 @@ def _to_disp_boxes(det_boxes):
 
 
 def _draw_preview_box(img, color, thickness):
-    """画预览区四边框,底部内收 thickness:线宽向边界外扩,底边外扩
-    部分落在底栏(428 起不透明)内被盖住→底部线看不见(2026-08-07)。"""
-    img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1 - thickness + 1,
+    """画预览区四边框。K230 draw_rectangle 参数为 (x, y, w, h) 而非对角坐标:
+    误按 x1/y1 传参会把宽高当对角点,底部线画到底栏内被盖(2026-08-07 根因);
+    传宽=屏宽、高=预览区高时四边贴可视区,线宽向内扩展全可见。"""
+    img.draw_rectangle(0, PREVIEW_Y, DISPLAY_SIZE[0], PREVIEW_H,
                        color=color, thickness=thickness)
 
 
