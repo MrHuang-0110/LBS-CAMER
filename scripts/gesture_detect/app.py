@@ -76,7 +76,7 @@ def _init_ai():
     _ai_ready = False
     try:
         det_kmodel = "/sdcard/examples/kmodel/hand_det.kmodel"
-        rec_kmodel = "/sdcard/examples/kmodel/hand_reco.kmodel"
+        rec_kmodel = "/sdcard/examples/kmodel/recognition.kmodel"
         print("[gesture_detect] loading hand detection + recognition models...")
         _hand_rec = HandRecognition(
             det_kmodel, rec_kmodel,

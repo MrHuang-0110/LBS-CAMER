@@ -1,12 +1,12 @@
 # core/gesture_db.py — 手势 ID 内存数据库(任意手势特征匹配)
 #
 # 2026-08-07 语义重构:从"4 类 label_idx 精确匹配"改为"任意手势特征匹配":
-#   - 特征 = hand_reco.kmodel 的 4 维 softmax 分布(手势形态特征),K2 学习入库
+#   - 特征 = recognition.kmodel 的 512 维通用特征(任意手势形态),K2 学习入库
 #   - 余弦匹配 score = cos/2+0.5,阈值 GESTURE_MATCH_THRESHOLD;已注册手势间
 #     best/second 差 < GESTURE_MATCH_MARGIN → 判不确定(防 ID 混淆,镜像 face_db)
 #   - 注册:相似特征(同一手势重复学习)返回原槽不占新槽;否则空槽优先/轮转覆盖
-#   - 持久化:特征 list 序列化 JSON;旧版 label_idx(int) 数据加载时自动转
-#     one-hot 特征平滑迁移
+#   - 持久化:特征 list 序列化 JSON;旧版 label_idx(int) 数据 one-hot 迁移;
+#     旧版 hand_reco 4 维特征(维度不匹配)加载时丢弃作废(防误匹配)
 #
 # 纯 Python(无 MicroPython 依赖)→ 可在 host 端真单元测试。
 
@@ -14,19 +14,24 @@ from core import db_store
 
 GESTURE_DB_PATH = "/sdcard/CamerAi/data/gesture_db.json"
 
-# hand_reco.kmodel 输出维度(4 类 softmax → 手势形态特征)
-GESTURE_FEAT_DIM = 4
-# 匹配阈值(score = cos/2+0.5 映射后)。0.85 ⇒ cos≥0.7:同手势不同帧推理
-# 分布抖动可命中,不同手势分布差异明显(如 gun≈[1,0,0,0] vs five≈[0,0,0,1])
-# 不命中。板端若误匹配可调高,漏匹配可调低。
-GESTURE_MATCH_THRESHOLD = 0.85
+# recognition.kmodel 输出维度(512 维通用特征,同 object_classify/face_db)
+GESTURE_FEAT_DIM = 512
+# 匹配阈值(score = cos/2+0.5 映射后)。0.82 ⇒ cos≥0.64,同 object_classify/face_db
+# 经验:CNN 特征几乎总正相关,阈值勿降(0.5 会全部命中同一 ID——4 维 softmax
+# 误匹配板端复现)。板端若误匹配可调高,漏匹配可调低。
+GESTURE_MATCH_THRESHOLD = 0.82
 # 多人注册时 best 与 second 的最小分数差。差更小 → 特征不可区分,
 # 判"不确定"返回 None(防已注册手势之间 ID 混淆)。单注册手势不受影响。
-GESTURE_MATCH_MARGIN = 0.10
+GESTURE_MATCH_MARGIN = 0.06
 
 
 def _cos_similarity(a, b):
-    """两特征余弦相似度 → score = cos/2+0.5 (0~1,纯 Python,host/板端通用)。"""
+    """两特征余弦相似度 → score = cos/2+0.5 (0~1,纯 Python,host/板端通用)。
+
+    维度不等(旧 4 维数据/异常特征)返回 0.0——不参与匹配,防越界与误匹配。
+    """
+    if len(a) != len(b):
+        return 0.0
     dot = 0.0
     na = 0.0
     nb = 0.0
@@ -132,9 +137,12 @@ class _GestureDB:
             for slot_str, feat in data.get("slots", {}).items():
                 slot_id = int(slot_str)
                 if isinstance(feat, (list, tuple)):
-                    self._features[slot_id] = [float(v) for v in feat]
+                    feat_list = [float(v) for v in feat]
+                    # 维度不匹配(旧 hand_reco 4 维特征)丢弃作废,防误匹配
+                    if len(feat_list) == GESTURE_FEAT_DIM:
+                        self._features[slot_id] = feat_list
                 else:
-                    # 旧版 label_idx(0-3)→ one-hot 特征
+                    # 旧版 label_idx(0-3)→ one-hot 特征迁移
                     one_hot = [0.0] * GESTURE_FEAT_DIM
                     idx = int(feat)
                     if 0 <= idx < GESTURE_FEAT_DIM:

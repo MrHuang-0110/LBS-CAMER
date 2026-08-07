@@ -1,12 +1,15 @@
-# core/gesture_ai.py — 手势检测与识别封装(移植 demo 实验9,单通道 2026-08-07)
+# core/gesture_ai.py — 手势检测与识别封装(单通道 + recognition 通用特征)
 #
 # 双 kmodel: hand_det.kmodel(手掌检测,512×512,9 anchors) +
-#           hand_reco.kmodel(手势形态特征,224×224,4 类 softmax 输出)
+#           recognition.kmodel(通用特征提取,224×224,512 维)
+#
+# 2026-08-07 v2：手势特征从 hand_reco(4 类 softmax) 换 recognition.kmodel
+# (512 维通用特征)——4 维 softmax 分布区分"任意手势"能力弱,板端误匹配
+# ("学一个手势,换手势也识别成功");512 维强特征同 object_classify 已验证
+# (阈值 0.82 + margin 0.06)。
 #
 # 单通道(死机根治 2026-08-07,同 object_detect/body_detect):AI 直接吃 chn0
-# VGA 显示帧推理,无 chn2 大帧 DMA 竞争。hand_reco 的 4 维 softmax 分布不再
-# 作"4 类分类"(gun/other/yeah/five),而是作手势形态特征供任意手势 ID 学习
-# (K2 注册 + gesture_db 余弦匹配)。
+# VGA 显示帧推理,无 chn2 大帧 DMA 竞争。
 #
 # 镜像 core/object_ai.py 封装风格。不内置 draw_result——画框/标签由 app on_frame 负责。
 
@@ -24,16 +27,13 @@ from libs.PipeLine import ScopedTiming
 RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 
-# kmodel 路径(匹配 demo 实验9 的存放位置)
+# kmodel 路径(匹配 demo 存放位置;recognition.kmodel 同 object_classify)
 HAND_DET_KMPATH = "/sdcard/examples/kmodel/hand_det.kmodel"
-HAND_RECO_KMPATH = "/sdcard/examples/kmodel/hand_reco.kmodel"
+GESTURE_RECO_KMPATH = "/sdcard/examples/kmodel/recognition.kmodel"
 
 # 9 个 hardcode anchors(同 demo 实验9,不从 .bin 读)
 HAND_ANCHORS = [26, 27, 53, 52, 75, 71, 80, 99, 106, 82,
                 99, 134, 140, 113, 161, 172, 245, 276]
-
-# 4 类手势标签(同 demo)
-HAND_LABELS = ["gun", "other", "yeah", "five"]
 
 
 def ALIGN_UP(x, align=16):
@@ -137,17 +137,17 @@ class HandDetectionApp(AIBase):
         time.sleep_ms(50)
 
 
-class HandRecognitionApp(AIBase):
-    """手势形态特征提取(hand_reco.kmodel, 224×224 输入)。
+class GestureFeatureApp(AIBase):
+    """recognition.kmodel 手势特征提取(224×224, crop 手掌框, 512 维)。
 
-    softmax 输出 4 维分布不再当"4 类分类",而是当任意手势的形态特征:
-    postprocess 返回 4 维 list,供 gesture_db 余弦匹配做 ID 学习。
+    镜像 object_classify_ai.FeatureExtractionApp,但 _get_crop_param 适配
+    hand_det 检测框格式 [cls, score, x1, y1, x2, y2](坐标索引 2-5)。
     """
 
-    def __init__(self, kmodel_path, model_input_size, labels=None,
-                 rgb888p_size=None, display_size=None, debug_mode=0):
-        if labels is None:
-            labels = HAND_LABELS
+    def __init__(self, kmodel_path, model_input_size=None, rgb888p_size=None,
+                 display_size=None, debug_mode=0):
+        if model_input_size is None:
+            model_input_size = [224, 224]
         if rgb888p_size is None:
             rgb888p_size = RGB888P_SIZE
         if display_size is None:
@@ -155,7 +155,6 @@ class HandRecognitionApp(AIBase):
         super().__init__(kmodel_path, model_input_size, rgb888p_size, debug_mode)
         self.kmodel_path = kmodel_path
         self.model_input_size = model_input_size
-        self.labels = labels
         self.rgb888p_size = [ALIGN_UP(rgb888p_size[0], 16), rgb888p_size[1]]
         self.display_size = [ALIGN_UP(display_size[0], 16), display_size[1]]
         self.crop_params = []
@@ -163,11 +162,11 @@ class HandRecognitionApp(AIBase):
         self.ai2d = Ai2d(debug_mode)
         self.input_is_packed = configure_ai2d_input(self.ai2d)
 
-    def config_preprocess(self, det, input_image_size=None):
+    def config_preprocess(self, det_box, input_image_size=None):
         gc.collect()
         with ScopedTiming("set preprocess config", self.debug_mode > 0):
             ai2d_input_size = input_image_size if input_image_size else self.rgb888p_size
-            self.crop_params = self._get_crop_param(det)
+            self.crop_params = self._get_crop_param(det_box)
             self.ai2d.crop(self.crop_params[0], self.crop_params[1],
                            self.crop_params[2], self.crop_params[3])
             self.ai2d.resize(nn.interp_method.tf_bilinear, nn.interp_mode.half_pixel)
@@ -175,6 +174,7 @@ class HandRecognitionApp(AIBase):
                             [1, 3, self.model_input_size[1], self.model_input_size[0]])
 
     def _get_crop_param(self, det_box):
+        """hand_det 框 [cls, score, x1, y1, x2, y2] → 方形放大 crop(同 demo 逻辑)。"""
         x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
         w, h = int(x2 - x1), int(y2 - y1)
         length = max(w, h) / 2
@@ -189,16 +189,9 @@ class HandRecognitionApp(AIBase):
         h_kp = int(y2_kp - y1_kp + 1)
         return [x1_kp, y1_kp, w_kp, h_kp]
 
-    def _softmax(self, x):
-        x_max = np.max(x)
-        x = np.exp(x - x_max)
-        return x / np.sum(x)
-
     def postprocess(self, results):
         with ScopedTiming("postprocess", self.debug_mode > 0):
-            result = results[0].reshape(results[0].shape[0] * results[0].shape[1])
-            x_softmax = self._softmax(result)
-            return x_softmax.tolist()  # 4 维手势形态特征(任意手势 ID 学习用)
+            return results[0][0]  # 512 维通用特征(任意手势 ID 学习用)
 
     def deinit(self):
         try:
@@ -219,19 +212,21 @@ class HandRecognitionApp(AIBase):
 
 
 class HandRecognition:
-    """手势检测+分类组合:先检手掌再分类,返回检测框+识别结果。"""
+    """手势检测+特征提取组合:先检手掌再提 512 维特征,返回检测框+特征。
 
-    def __init__(self, hand_det_kmodel, hand_rec_kmodel,
+    任意手势 ID 学习链路:det_boxes + feats 等长列表,app 层 gesture_db
+    余弦匹配(阈值 0.82)分配/识别 ID。
+    """
+
+    def __init__(self, hand_det_kmodel, rec_kmodel,
                  det_input_size=None, rec_input_size=None,
-                 labels=None, anchors=None,
+                 anchors=None,
                  confidence_threshold=0.2, nms_threshold=0.5,
                  strides=None, rgb888p_size=None, display_size=None, debug_mode=0):
         if det_input_size is None:
             det_input_size = [512, 512]
         if rec_input_size is None:
             rec_input_size = [224, 224]
-        if labels is None:
-            labels = HAND_LABELS
         if anchors is None:
             anchors = HAND_ANCHORS
         if strides is None:
@@ -241,10 +236,9 @@ class HandRecognition:
         if display_size is None:
             display_size = DISPLAY_SIZE
         self.hand_det_kmodel = hand_det_kmodel
-        self.hand_rec_kmodel = hand_rec_kmodel
+        self.rec_kmodel = rec_kmodel
         self.det_input_size = det_input_size
         self.rec_input_size = rec_input_size
-        self.labels = labels
         self.anchors = anchors
         self.confidence_threshold = confidence_threshold
         self.nms_threshold = nms_threshold
@@ -261,9 +255,10 @@ class HandRecognition:
             strides=self.strides,
             rgb888p_size=self.rgb888p_size, display_size=self.display_size,
             debug_mode=0)
-        self.hand_rec = HandRecognitionApp(
-            self.hand_rec_kmodel, model_input_size=self.rec_input_size,
-            labels=self.labels,
+        # ⚠️ 双 kmodel 顺序根因(坑#19):feature kmodel 必须先加载,
+        # 再 hand_det.config_preprocess(),否则破坏共享 NPU/AI2D 状态。
+        self.feature = GestureFeatureApp(
+            self.rec_kmodel, model_input_size=self.rec_input_size,
             rgb888p_size=self.rgb888p_size, display_size=self.display_size)
         # 透传子类 input_is_packed(两个子类同固件下结果一致),供 app 层单通道判定
         self.input_is_packed = self.hand_det.input_is_packed
@@ -273,7 +268,7 @@ class HandRecognition:
         """推理当前帧。返回 (hand_det_res, hand_feats)(等长,都是已过滤)。
 
         hand_det_res: 手掌检测框列表,每框 [cls, score, x1,y1,x2,y2](仅通过边界过滤的)。
-        hand_feats: 每框 4 维手势形态特征 list(hand_reco softmax 分布,同索引对应)。
+        hand_feats: 每框 512 维特征 list(recognition.kmodel,同索引对应)。
         过滤:高度 < 0.1×rgb888p_h 剔除;边缘窄掌剔除(同 demo 逻辑)。
         """
         det_boxes = self.hand_det.run(img_np)
@@ -293,10 +288,13 @@ class HandRecognition:
                     and ((x1 < (0.01 * self.rgb888p_size[0]))
                          or (x2 > (0.99 * self.rgb888p_size[0])))):
                 continue
-            self.hand_rec.config_preprocess(det_box)
-            feat = self.hand_rec.run(img_np)
+            self.feature.config_preprocess(det_box)
+            feat = self.feature.run(img_np)
             hand_det_res.append(det_box)
-            hand_feats.append(feat)
+            try:
+                hand_feats.append(feat.tolist())  # ulab → list(512 维)
+            except Exception:
+                hand_feats.append(list(feat))
         return hand_det_res, hand_feats
 
     def deinit(self):
@@ -305,6 +303,6 @@ class HandRecognition:
         except Exception:
             pass
         try:
-            self.hand_rec.deinit()
+            self.feature.deinit()
         except Exception:
             pass
