@@ -35,7 +35,8 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-BOX_LOCK = 0xFFD700      # 锁定高亮黄框
+BOX_LOCK = 0xFFD700      # 学习确认闪烁黄框
+BOX_ACTIVE = 0xFFFFFF    # 识别激活白色全局框(命中已学物体时预览区白框,用户确认)
 # 检测降频:锁定态每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框。
 # 2026-08-07 板端(object_detect 验证):2→3 降推理频率提平均帧率。
 DET_INTERVAL = 3
@@ -217,7 +218,7 @@ def on_frame(img):
         disp_boxes = _to_disp_boxes(det_boxes)
         _last_disp = disp_boxes
 
-    # 匹配已学 ID:命中物体不画框,全屏框 + 中心标 ID + 十字架对准最佳
+    # 匹配已学 ID:命中物体不画物体框,预览区白框 + 左上角槽位色 ID + 十字架对准最佳
     hits = []    # [(idx, slot, score)]
     best = None  # 最佳匹配 (idx, slot, score)
     for i, feat in enumerate(features):
@@ -228,17 +229,19 @@ def on_frame(img):
                 best = (i, slot, sc)
 
     if best is not None:
-        # 预览区四边全局框(识别激活指示),左上角标命中 ID
+        # 预览区四边白色全局框(识别激活指示,顶/底栏外不可见)
         img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
-                           color=_draw_color(BOX_LOCK), thickness=4)
-        ids = []
+                           color=_draw_color(BOX_ACTIVE), thickness=4)
+        label_x = 8
         for i, slot, sc in hits:
             x, y, w, h = disp_boxes[i]
-            ids.append("ID%d" % slot)
             slots.append((slot, x, y, w, h, int(sc * 100) | LEARNED_FLAG))
             names.append((slot, "obj%d" % slot))
-        img.draw_string_advanced(8, 6, 24, " ".join(ids),
-                                 color=_draw_color(BOX_LOCK))
+            # 左上角按槽位颜色标 ID(1~4 历史色 / 5~25 色环),水平排列
+            tag = "ID%d" % slot
+            img.draw_string_advanced(label_x, PREVIEW_Y + 4, 24, tag,
+                                     color=_draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN)))
+            label_x += len(tag) * 24 + 8
     # 十字架固定屏幕中央不动(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
