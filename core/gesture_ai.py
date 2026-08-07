@@ -1,7 +1,12 @@
-# core/gesture_ai.py — 手势检测与识别封装(移植 demo 实验9)
+# core/gesture_ai.py — 手势检测与识别封装(移植 demo 实验9,单通道 2026-08-07)
 #
 # 双 kmodel: hand_det.kmodel(手掌检测,512×512,9 anchors) +
-#           hand_reco.kmodel(手势分类,224×224,4类)
+#           hand_reco.kmodel(手势形态特征,224×224,4 类 softmax 输出)
+#
+# 单通道(死机根治 2026-08-07,同 object_detect/body_detect):AI 直接吃 chn0
+# VGA 显示帧推理,无 chn2 大帧 DMA 竞争。hand_reco 的 4 维 softmax 分布不再
+# 作"4 类分类"(gun/other/yeah/five),而是作手势形态特征供任意手势 ID 学习
+# (K2 注册 + gesture_db 余弦匹配)。
 #
 # 镜像 core/object_ai.py 封装风格。不内置 draw_result——画框/标签由 app on_frame 负责。
 
@@ -15,11 +20,8 @@ from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
-# AI 通道分辨率(对齐 face_detect 的 chn2 XGA RGBP888)
-# AI 通道分辨率(chn2 SVGA 800x600,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
-# 持续搬运与显示 DMA 竞争累积致几分钟死机;手部检测输入 512x512,800x600 高度足够,
-# DMA 比 XGA 少约 36%)
-RGB888P_SIZE = [800, 600]
+# AI 通道分辨率 = 显示通道分辨率(单通道:chn0 VGA 640x480 显示+推理)
+RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 
 # kmodel 路径(匹配 demo 实验9 的存放位置)
@@ -36,6 +38,19 @@ HAND_LABELS = ["gun", "other", "yeah", "five"]
 
 def ALIGN_UP(x, align=16):
     return (x + align - 1) // align * align
+
+
+def configure_ai2d_input(ai2d):
+    """配置 ai2d 输入格式并返回 input_is_packed 标志。
+
+    优先 ai2d packed RGB888 枚举(RGB888p_FMT,K230 中 p=packed,与
+    Sensor.RGBP888 的 P=planar 命名相反),支持则 chn0 帧零拷贝直接喂;
+    否则 NCHW(planar 语义)须软件重排(2026-08-07 全屏假框根因)。
+    """
+    input_is_packed = hasattr(nn.ai2d_format, "RGB888p_FMT")
+    input_fmt = getattr(nn.ai2d_format, "RGB888p_FMT", nn.ai2d_format.NCHW_FMT)
+    ai2d.set_ai2d_dtype(input_fmt, nn.ai2d_format.NCHW_FMT, np.uint8, np.uint8)
+    return input_is_packed
 
 
 class HandDetectionApp(AIBase):
@@ -61,8 +76,7 @@ class HandDetectionApp(AIBase):
         self.display_size = [ALIGN_UP(display_size[0], 16), display_size[1]]
         self.debug_mode = debug_mode
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
-                                 np.uint8, np.uint8)
+        self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, input_image_size=None):
         gc.collect()
@@ -124,7 +138,11 @@ class HandDetectionApp(AIBase):
 
 
 class HandRecognitionApp(AIBase):
-    """手势分类(hand_reco.kmodel, 224×224 输入,4 类 softmax)。"""
+    """手势形态特征提取(hand_reco.kmodel, 224×224 输入)。
+
+    softmax 输出 4 维分布不再当"4 类分类",而是当任意手势的形态特征:
+    postprocess 返回 4 维 list,供 gesture_db 余弦匹配做 ID 学习。
+    """
 
     def __init__(self, kmodel_path, model_input_size, labels=None,
                  rgb888p_size=None, display_size=None, debug_mode=0):
@@ -143,8 +161,7 @@ class HandRecognitionApp(AIBase):
         self.crop_params = []
         self.debug_mode = debug_mode
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
-                                 np.uint8, np.uint8)
+        self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, det, input_image_size=None):
         gc.collect()
@@ -181,9 +198,7 @@ class HandRecognitionApp(AIBase):
         with ScopedTiming("postprocess", self.debug_mode > 0):
             result = results[0].reshape(results[0].shape[0] * results[0].shape[1])
             x_softmax = self._softmax(result)
-            idx = int(np.argmax(x_softmax))
-            score = float(x_softmax[idx])
-            return idx, score
+            return x_softmax.tolist()  # 4 维手势形态特征(任意手势 ID 学习用)
 
     def deinit(self):
         try:
@@ -253,15 +268,15 @@ class HandRecognition:
         self.hand_det.config_preprocess()
 
     def run(self, img_np):
-        """推理当前帧。返回 (hand_det_res, hand_rec_res)(等长,都是已过滤)。
+        """推理当前帧。返回 (hand_det_res, hand_feats)(等长,都是已过滤)。
 
-        hand_det_res: 手掌检测框列表,每框 [..., x1,y1,x2,y2, ...](仅通过边界过滤的)。
-        hand_rec_res: [(label_idx, score), ...] 每个手掌的手势分类结果(同索引对应)。
+        hand_det_res: 手掌检测框列表,每框 [cls, score, x1,y1,x2,y2](仅通过边界过滤的)。
+        hand_feats: 每框 4 维手势形态特征 list(hand_reco softmax 分布,同索引对应)。
         过滤:高度 < 0.1×rgb888p_h 剔除;边缘窄掌剔除(同 demo 逻辑)。
         """
         det_boxes = self.hand_det.run(img_np)
         hand_det_res = []
-        hand_rec_res = []
+        hand_feats = []
         for det_box in det_boxes:
             x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
             w, h = int(x2 - x1), int(y2 - y1)
@@ -277,10 +292,10 @@ class HandRecognition:
                          or (x2 > (0.99 * self.rgb888p_size[0])))):
                 continue
             self.hand_rec.config_preprocess(det_box)
-            idx, score = self.hand_rec.run(img_np)
+            feat = self.hand_rec.run(img_np)
             hand_det_res.append(det_box)
-            hand_rec_res.append((idx, score))
-        return hand_det_res, hand_rec_res
+            hand_feats.append(feat)
+        return hand_det_res, hand_feats
 
     def deinit(self):
         try:

@@ -1,19 +1,25 @@
-# scripts/gesture_detect/app.py — 手势识别(双 kmodel + K2 注册 4 槽 + 协议 0x08)
+# scripts/gesture_detect/app.py — 手势识别(双 kmodel + 单通道 + 任意手势 ID 学习 + 协议 0x08)
 #
-# 复刻 object_detect 模式: chn2 AI 检测 → gesture_db.match(label_idx)
-# → 填 slots → K2 registrar → host_tick。画十字 + 彩色框 + ID 标签。
+# 2026-08-07 重构(用户需求:只识别任意手势,配合 ID 学习记录):
+# - 单通道(死机根治,同 object_detect/body_detect):AI 直接吃 chn0 VGA 显示帧,
+#   无 chn2 大帧 DMA 竞争。
+# - 语义变更:hand_reco 不再作 4 类分类(gun/other/yeah/five),其 4 维 softmax
+#   分布当"手势形态特征";K2 学习当前最大手掌 → gesture_db 余弦匹配 → ID。
+#   任意手势均可学习/识别,画框只显示 ID,不再显示类别名。
+# - 画框 + ID 标签 + host_tick(0x08);名称帧(0x0E)固定名 "GESTURE"。
 
 import gc
 import os
 import sys
 import time
 import lvgl as lv
+import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
+from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
-from core.gesture_ai import HandRecognition, HAND_LABELS, HAND_ANCHORS, RGB888P_SIZE, DISPLAY_SIZE
+from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
 
 BAR_H = 52
@@ -52,7 +58,7 @@ _clear_btn = None
 _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整 run)
-_last_det = ([], [])      # 上轮 (det_boxes, rec_results) 缓存
+_last_det = ([], [])      # 上轮 (det_boxes, feats) 缓存
 _last_rec = {}            # 上轮识别结果 {det_idx: slot}
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
@@ -75,7 +81,6 @@ def _init_ai():
         _hand_rec = HandRecognition(
             det_kmodel, rec_kmodel,
             det_input_size=[512, 512], rec_input_size=[224, 224],
-            labels=HAND_LABELS, anchors=HAND_ANCHORS,
             confidence_threshold=0.2, nms_threshold=0.5,
             rgb888p_size=RGB888P_SIZE, display_size=DISPLAY_SIZE,
             debug_mode=0)
@@ -104,95 +109,107 @@ def _deinit_ai():
         _hand_rec = None
 
 
-def _draw_hand_boxes(img, det_boxes, rec_results, rec):
-    """画手掌框 + ID/手势名标签。rec: {det_idx: slot};无 slot → 白框手势名。"""
-    for i, (det_box, (label_idx, score)) in enumerate(zip(det_boxes, rec_results)):
+# 名称帧固定名(任意手势无类别名,主机按 ID 区分)
+GESTURE_NAME = "GESTURE"
+
+
+def _draw_hand_boxes(img, det_boxes, rec):
+    """画手掌框 + ID 标签。rec: {det_idx: slot};无 slot → 白框(未学习)。"""
+    for i, det_box in enumerate(det_boxes):
         x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
         x = int(x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         y = int(y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
         w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-        label_name = HAND_LABELS[label_idx]
         slot = rec.get(i)
         if slot:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
             img.draw_rectangle(x, y, w, h, color=color, thickness=4)
-            img.draw_string_advanced(x + 2, y - 24, 24,
-                                     "ID%d %s" % (slot, label_name), color=color)
+            img.draw_string_advanced(x + 2, y - 24, 24, "ID%d" % slot, color=color)
         else:
             color = _draw_color(BOX_UNKNOWN)
             img.draw_rectangle(x, y, w, h, color=color, thickness=2)
-            img.draw_string_advanced(x + 2, y - 24, 24, label_name, color=color)
 
 
 def on_frame(img):
-    """chn2 检测 → 每只手分类 → match DB → 画框 + ID 标签 → host_tick。
+    """单通道推理 → 特征匹配 → 画框 + ID 标签 → host_tick。
 
-    检测/识别一体降频(DET_INTERVAL):检测帧跑完整 run(chn2 取流+NPU,
-    run 后立即 gc 回收原生缓冲,防坑#16 累积死机),非检测帧用缓存框+
-    缓存识别结果画框(ID 稳定不闪,索引与缓存框一致无窜脸)。K2 注册只在
-    检测帧(有新鲜 rec_results)。
+    单通道(死机根治 2026-08-07,同 object_detect):AI 直接吃传入 chn0 显示帧
+    (img.to_numpy_ref),无 chn2 独立大帧。每只手掌提取 4 维形态特征
+    (hand_reco softmax 分布)→ gesture_db 余弦匹配 → 已学习显示 ID 彩色框,
+    未学习白框。K2 注册只在检测帧(有新鲜 feats)。
+    检测/识别一体降频(DET_INTERVAL):run 后立即 gc 回收原生缓冲,防坑#16。
     """
-    global _det_counter, _last_det, _last_rec, _last_slots
+    global _det_counter, _last_det, _last_rec, _last_slots, _last_names
     if _RUNTIME is None or _hand_rec is None:
         return
-    det_boxes, rec_results = _last_det
+    det_boxes, feats = _last_det
     rec = _last_rec
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
-    names = []   # 名称帧(类型 0x0E):[(id, 手势名)],仅已注册槽位
+    names = []   # 名称帧(类型 0x0E):[(id, 固定名 GESTURE)],仅已注册槽位
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-        img_np = img_ai.to_numpy_ref()
+        # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
+        # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
+        # img 持有至 show_image。
+        img_np = img.to_numpy_ref()
+        if not _hand_rec.input_is_packed:
+            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
+            _planar[0] = img_np[:, :, 0]
+            _planar[1] = img_np[:, :, 1]
+            _planar[2] = img_np[:, :, 2]
+            img_np = _planar
         try:
-            det_boxes, rec_results = _hand_rec.run(img_np)
+            det_boxes, feats = _hand_rec.run(img_np)
         except Exception as e:
             print("[gesture_detect] run error: %s" % e)
-            det_boxes, rec_results = [], []
-        _last_det = (det_boxes, rec_results)
-        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
-        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+            det_boxes, feats = [], []
+        if not _hand_rec.input_is_packed:
+            del _planar
         del img_np
-        del img_ai
         gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
-        # 识别匹配 + 填槽(帧内 ID 去重:一个 slot 只标一个框)
+        _last_det = (det_boxes, feats)
+        # 特征匹配填槽(帧内 ID 去重:一个 slot 只标一个框;未学习上报 id=0)
         rec = {}
         filled_slots = set()
-        for i, (det_box, (label_idx, score)) in enumerate(zip(det_boxes, rec_results)):
+        for i, (det_box, feat) in enumerate(zip(det_boxes, feats)):
             x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
             x = int(x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
             y = int(y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
             w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
             h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            conf = int(score * 100)
-            slot, _dummy = gesture_db.match(label_idx)
+            det_conf = int(float(det_box[1]) * 100)
+            slot, match_score = gesture_db.match(feat)
             if slot is not None and slot not in filled_slots:
                 filled_slots.add(slot)
                 rec[i] = slot
-                slots.append((slot, x, y, w, h, conf | LEARNED_FLAG))  # 已学习:bit7=1
-                names.append((slot, HAND_LABELS[label_idx]))
+                conf = int(match_score * 100)  # 已学习:conf=匹配置信度
+                slots.append((slot, x, y, w, h, conf | LEARNED_FLAG))  # bit7=1
+                names.append((slot, GESTURE_NAME))
+            else:
+                slots.append((0, x, y, w, h, det_conf))  # 未学习:id=0 + learned=0
         _last_rec = rec
-        # K2 注册:当前帧最大手掌的标签(检测帧才有新鲜 rec_results)
+        # K2 注册:当前帧最大手掌的特征(检测帧才有新鲜 feats)
         if _id_registry is not None and _id_registry.has_pending() and det_boxes:
             max_i = max(range(len(det_boxes)),
                         key=lambda j: (det_boxes[j][4] - det_boxes[j][2])
                                       * (det_boxes[j][5] - det_boxes[j][3]))
             det = det_boxes[max_i]
-            if max_i < len(rec_results) and \
+            if max_i < len(feats) and \
                     (det[4] - det[2]) * (det[5] - det[3]) >= MIN_REG_AREA:
-                reg_label_idx = rec_results[max_i][0]
+                reg_feat = feats[max_i]
                 try:
                     slot = _id_registry.try_register(
-                        reg_label_idx, _RUNTIME.buzzer,
+                        reg_feat, _RUNTIME.buzzer,
                         registrar=gesture_db.register)
                     if slot is not None:
                         gesture_db.flush_to_disk()  # 注册即写(task_handler 前安全窗口)
-                        _db_slots[slot] = reg_label_idx
+                        _db_slots[slot] = reg_feat
                 except Exception as e:
                     print("[gesture_detect] register error: %s" % e)
     # 画框:每帧(检测帧新框/非检测帧缓存框;ID 与框同源,索引一致)
-    _draw_hand_boxes(img, det_boxes, rec_results, rec)
+    _draw_hand_boxes(img, det_boxes, rec)
     # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
     # 非检测帧:复用上轮槽位,保持主机数据连续

@@ -285,8 +285,10 @@ class AppRuntime:
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并恢复 chn1 QVGA RGB565 检测。
             pass
         elif category_id == "gesture_detect":
-            # chn2 SVGA RGBP888 做 AI 推理(死机修复降 SVGA 800x600,输入 512 够用)
-            chs.append((CAM_CHN_ID_2, Sensor.SVGA, Sensor.RGBP888))
+            # 单通道(死机根治 2026-08-07,同 object_detect):仅 chn0 VGA
+            # RGB888 显示+AI 推理(手部检测 512 输入 VGA 够用),无 chn2 大帧
+            # DMA 竞争。
+            pass
         elif category_id == "body_detect":
             # 单通道(死机根治 2026-08-07,同 object_detect):换 yolov8n-pose
             # 姿态模型(输入 320x320)后仅 chn0 VGA RGB888 显示+AI 推理,
