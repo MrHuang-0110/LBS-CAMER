@@ -1,10 +1,11 @@
-# scripts/object_classify/app.py — 物体分类学习器(双 kmodel + 5 ID 选项卡 + 点击锁定 + KEY 记录)
+# scripts/object_classify/app.py — 物体分类学习器(双 kmodel + 5 ID 选项卡 + KEY 中心学习)
 #
 # 单通道(死机根治 2026-08-07,同 object_detect): AI 直接吃 chn0 显示帧,
-# det(YOLOv8n) + rec(recognition) 共用同一帧。学习器模式(2026-08-07 用户
-# 确认):空闲态零推理(预览丝滑);点底栏 ID1~ID5 选学习目标槽;点预览区物体
-# → 单次 det+1rec 锁定;按 K2 → 注册锁定特征到选中 ID 槽 + 全屏黄框闪烁确认;
-# 锁定态每 DET_INTERVAL 帧降频推理持续识别(已学 ID%d / 未学 LOCK)。
+# det(YOLOv8n) + rec(recognition) 共用同一帧。学习器模式(v2,2026-08-07):
+# 无已学 ID 时零推理(预览丝滑);点底栏 ID1~ID5 选学习目标槽(选中绿高亮);
+# 中央十字对准物体按 K2 → 单次 det+1rec 学中心物体到选中 ID 槽 + 全屏黄框
+# 闪烁确认;有已学 ID 时每 DET_INTERVAL 帧降频识别:命中物体不画框,屏幕四边
+# 全局框 + 物体中心标 ID%d + 十字架对准最佳匹配。
 
 import gc
 import os
@@ -19,9 +20,8 @@ from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.object_classify_ai import ObjectClassifyRecognition, \
     OBJ_DET_KMPATH, OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
-from core.object_classify_db import object_classify_db, database_search, \
-    to_feature_list, OBJECT_CLASSIFY_DB_PATH
-from core.object_classify_lock import select_lock_index, pick_box_at_point
+from core.object_classify_db import object_classify_db, database_search
+from core.object_classify_lock import pick_box_at_point
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -89,8 +89,6 @@ _preview = None
 _id_registry = None
 _ocr = None                 # ObjectClassifyRecognition
 _db_features = {}
-_locked_feature = None      # 锁定特征(plain list,跨帧持有);None=未锁定
-_pending_click = None       # (x,y) 待处理触摸点(VGA 空间),或 None
 _overlay = None
 _clear_btn = None
 _save_btn = None
@@ -150,40 +148,44 @@ def _deinit_ai():
 
 
 def on_frame(img):
-    """学习器状态机:空闲零推理 / 点击单次锁定 / 锁定态降频识别 / K2 注册选中 ID。
+    """学习器:DB 空零推理 / K2 学中心物体 / DB 非空降频识别已学 ID(v2 交互)。
 
-    空闲态(_locked_feature is None):零 NPU 推理,纯预览 + 绿十字,30fps 丝滑。
-    点击预览区 → _click_lock 单次 det+1rec 锁定命中物体;锁定态每 DET_INTERVAL
-    帧跑 det+rec,select_lock_index 跟踪锁定物体(已学显示 ID%d,未学 LOCK);
-    锁定丢失/点空白回空闲。K2(锁定态) → register_at 注册锁定特征到
-    _selected_id 槽,置 _record_flash 全屏黄框闪烁确认。单通道(AI 吃 chn0 帧)。
+    无已学 ID:零 NPU 推理,纯预览 + 中央绿十字,30fps 丝滑。按 K2 → 单次
+    det + 提取画面中心(320,240)物体特征 → register_at 注册到选中 ID 槽 →
+    全屏黄框闪烁确认。识别(DB 非空):每 DET_INTERVAL 帧 det+全框特征+
+    database_search;命中已学 ID 的物体不画物体框——屏幕四边画全局框 +
+    各命中物体中心标 ID%d + 中央十字架移到最佳匹配物体中心;未命中十字架
+    回中央。单通道(AI 吃 chn0 帧,死机根治)。
     """
-    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots, _last_names, _record_flash
+    global _det_counter, _last_det, _last_disp, _last_slots, _last_names, _record_flash
     if _RUNTIME is None or _ocr is None:
         return
 
-    # 注册成功全屏框确认(闪烁若干帧,KEY 记录反馈)
+    # 注册成功全屏框确认(闪烁若干帧,K2 学习反馈)
     if _record_flash > 0:
         img.draw_rectangle(0, 0, DISPLAY_SIZE[0], DISPLAY_SIZE[1],
                            color=_draw_color(BOX_LOCK), thickness=6)
         _record_flash -= 1
 
+    # K2 学习:按下即学画面中心物体(学完本帧返回,避免同帧双重推理)
+    if _id_registry is not None and _id_registry.has_pending():
+        _learn_center(img)
+        if _RUNTIME is not None and _RUNTIME.host is not None:
+            _RUNTIME.host_tick([], [])
+        return
+
     slots = []   # 列表化:统一上限 25,order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, 名称)],已注册目标用 obj<槽号> 标识
 
-    if _locked_feature is None:
-        # ── 空闲态:零推理,纯预览(30fps 丝滑) ──
-        if _pending_click is not None:
-            px, py = _pending_click
-            _pending_click = None
-            _click_lock(img, px, py)
+    if not _db_features:
+        # ── 无已学 ID:零推理,纯预览(30fps 丝滑) ──
         # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
         img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
         if _RUNTIME is not None and _RUNTIME.host is not None:
             _RUNTIME.host_tick(slots, names)
         return
 
-    # ── 锁定态:降频推理 + 特征跟踪 ──
+    # ── 识别模式:降频推理 + 匹配已学 ID ──
     det_boxes, features = _last_det
     disp_boxes = _last_disp
     _det_counter += 1
@@ -202,63 +204,38 @@ def on_frame(img):
         if img_np is not None:
             del img_np
         gc.collect()
-        # 检测框(rgb888p) → 显示坐标(VGA)
         disp_boxes = _to_disp_boxes(det_boxes)
         _last_disp = disp_boxes
 
-    # 锁定目标跟踪:特征余弦逐帧匹配(≥0.82),命中画黄框+十字,否则解锁回空闲
-    if _locked_feature is not None:
-        idx, score = select_lock_index(_locked_feature, features)
-        if idx is not None and idx < len(disp_boxes):
-            x, y, w, h = disp_boxes[idx]
-            color = _draw_color(BOX_LOCK)
-            img.draw_rectangle(x, y, w, h, color=color, thickness=5)
-            img.draw_cross(x + w // 2, y + h // 2,
-                           color=(0xFF, 0x00, 0xD7, 0xFF), size=24, thickness=2)
-            conf = int(score * 100)
-            slot, _sc = database_search(features[idx], _db_features)
-            if slot is not None:
-                img.draw_string_advanced(x + 2, y - 24, 24,
-                                         "ID%d LOCK" % slot, color=color)
-                slots.append((slot, x, y, w, h, conf | LEARNED_FLAG))  # 已学习:bit7=1
-                names.append((slot, "obj%d" % slot))
-            else:
-                img.draw_string_advanced(x + 2, y - 24, 24, "LOCK", color=color)
-                slots.append((0, x, y, w, h, conf))  # id=0 锁定但未注册(learned=0)
-        else:
-            # 锁定丢失:目标离开画面/被遮挡 → 自动解锁回空闲(零推理)
-            _locked_feature = None
+    # 匹配已学 ID:命中物体不画框,全屏框 + 中心标 ID + 十字架对准最佳
+    hits = []    # [(idx, slot, score)]
+    best = None  # 最佳匹配 (idx, slot, score)
+    for i, feat in enumerate(features):
+        slot, sc = database_search(feat, _db_features)
+        if slot is not None:
+            hits.append((i, slot, sc))
+            if best is None or sc > best[2]:
+                best = (i, slot, sc)
 
-    # 触摸:点空白解锁回空闲 / 点中其它框换锁(仅锁定态消费)
-    if _pending_click is not None:
-        px, py = _pending_click
-        _pending_click = None
-        idx = pick_box_at_point(disp_boxes, px, py)
-        if idx is None:
-            _locked_feature = None
-        elif idx < len(features) and _locked_feature is not None:
-            # 拷成 plain list 跨帧持有(避 ulab ndarray 缓冲被 NPU 复用)
-            _locked_feature = to_feature_list(features[idx])
-            _det_counter = DET_INTERVAL - 1  # 换锁后首帧必推理(同点击锁定,防旧帧特征匹配闪丢)
-            if _RUNTIME.buzzer is not None:
-                _RUNTIME.buzzer.beep(ms=50)
-
-    # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
-    img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
-
-    # K2 注册:锁定特征进选中 ID 槽(register_at,底栏选项卡决定 _selected_id)
-    if _id_registry is not None and _locked_feature is not None \
-            and _id_registry.has_pending():
-        try:
-            slot = _id_registry.try_register(
-                _locked_feature, _RUNTIME.buzzer,
-                registrar=lambda f: object_classify_db.register_at(f, _selected_id))
-            if slot is not None:
-                object_classify_db.flush_to_disk()
-                _db_features[slot] = object_classify_db.get_features().get(slot)
-                _record_flash = RECORD_FLASH_FRAMES  # 全屏框闪烁确认
-        except Exception as e:
-            print("[object_classify] register error: %s" % e)
+    if best is not None:
+        # 屏幕四边全局框(识别激活指示)
+        img.draw_rectangle(0, 0, DISPLAY_SIZE[0] - 1, DISPLAY_SIZE[1] - 1,
+                           color=_draw_color(BOX_LOCK), thickness=4)
+        # 每个命中已学物体:物体中心标 ID(不画物体框)
+        for i, slot, sc in hits:
+            x, y, w, h = disp_boxes[i]
+            img.draw_string_advanced(x + w // 2 - 18, y + h // 2 - 12, 24,
+                                     "ID%d" % slot,
+                                     color=_draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN)))
+            slots.append((slot, x, y, w, h, int(sc * 100) | LEARNED_FLAG))
+            names.append((slot, "obj%d" % slot))
+        # 中央十字架移动到最佳匹配物体中心(对准)
+        bx, by, bw, bh = disp_boxes[best[0]]
+        img.draw_cross(bx + bw // 2, by + bh // 2,
+                       color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+    else:
+        # 未命中:十字架回中央
+        img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
     if not do_det and _last_slots is not None:
@@ -271,55 +248,42 @@ def on_frame(img):
         _RUNTIME.host_tick(slots, names)
 
 
-def _click_lock(img, px, py):
-    """点击单次推理:det 全帧 + 仅命中框提 1 次特征(交互响应快 ~60ms)。
+def _learn_center(img):
+    """K2 学习画面中心物体:单次 det + 提中心框特征 → 注册到选中 ID 槽。
 
-    命中 → _locked_feature(plain list) + 蜂鸣 + 置 _det_counter 使下一帧必推理
-    (锁定态首帧即全框特征匹配);未命中/无框 → 保持空闲(零推理)。
+    中央十字对准物体后按 K2;命中(含中心点的框)才学习,中心无物体时长蜂鸣
+    提示。学习成功:全屏框闪烁确认 + 蜂鸣 + 置 _det_counter 使下一帧识别
+    首帧必推理(学习帧 on_frame 已 return,避免同帧双重推理)。
     """
-    global _locked_feature, _det_counter
+    global _det_counter, _record_flash
     img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
     try:
         img_np = _ai_input(img)
         det_boxes = _ocr.detector.run(img_np)
     except Exception as e:
-        print("[object_classify] click det error: %s" % e)
+        print("[object_classify] learn det error: %s" % e)
         det_boxes = []
-    disp_boxes = _to_disp_boxes(det_boxes)
-    idx = pick_box_at_point(disp_boxes, px, py)
-    if idx is not None and idx < len(det_boxes):
+    idx = pick_box_at_point(_to_disp_boxes(det_boxes), 320, 240)
+    if idx is not None:
         try:
             feature = _ocr.extract_feature(det_boxes[idx], img_np)
             if feature is not None:
-                _locked_feature = to_feature_list(feature)
-                if _RUNTIME.buzzer is not None:
-                    _RUNTIME.buzzer.beep(ms=50)
-                _det_counter = DET_INTERVAL - 1  # 下一帧锁定态首帧必推理
+                slot = _id_registry.try_register(
+                    feature, _RUNTIME.buzzer,
+                    registrar=lambda f: object_classify_db.register_at(f, _selected_id))
+                if slot is not None:
+                    object_classify_db.flush_to_disk()
+                    _db_features[slot] = object_classify_db.get_features().get(slot)
+                    _record_flash = RECORD_FLASH_FRAMES  # 全屏框闪烁确认
+                    _det_counter = DET_INTERVAL - 1      # 下一帧识别首帧必推理
         except Exception as e:
-            print("[object_classify] click lock error: %s" % e)
+            print("[object_classify] learn error: %s" % e)
+    else:
+        if _RUNTIME is not None and _RUNTIME.buzzer is not None:
+            _RUNTIME.buzzer.beep(ms=200)  # 中心无物体,学习失败提示
     if img_np is not None:
         del img_np
     gc.collect()
-
-
-def _on_preview_clicked(e):
-    """点预览区:记录屏幕坐标(VGA 空间),on_frame 里 pick_box_at_point。"""
-    global _pending_click
-    if e.get_code() != lv.EVENT.CLICKED:
-        return
-    if _overlay is not None:
-        global _close_overlay
-        _close_overlay = True
-        return
-    try:
-        # K230 MicroPython LVGL 绑定:get_point 需传预分配 point_t 填充(同 color_detect)。
-        indev = lv.indev_get_act()
-        if indev is not None:
-            pt = lv.point_t()
-            indev.get_point(pt)
-            _pending_click = (pt.x, pt.y)
-    except Exception as ex:
-        print("[object_classify] get_point error: %s" % ex)
 
 
 def _on_list_clicked(e):
@@ -415,11 +379,10 @@ def _on_tab_clicked(e, sid):
 
 
 def _refresh_tabs():
-    """按 _selected_id 刷新选项卡高亮(选中按 ID 槽色,未选深灰)。"""
+    """按 _selected_id 刷新选项卡高亮(选中绿色,未选深灰)。"""
     for i, tab in enumerate(_tabs):
-        sid = i + 1
-        if sid == _selected_id:
-            tab.set_style_bg_color(lv.color_hex(BOX_COLORS.get(sid, BOX_UNKNOWN)), 0)
+        if i + 1 == _selected_id:
+            tab.set_style_bg_color(lv.color_hex(0x00FF00), 0)
         else:
             tab.set_style_bg_color(lv.color_hex(0x2A2A2A), 0)
 
@@ -495,8 +458,6 @@ def _build_ui(runtime, exit_flag):
     _preview.set_style_pad_all(0, 0)
     _preview.set_style_radius(0, 0)
     _preview.clear_flag(lv.obj.FLAG.SCROLLABLE)
-    _preview.add_flag(lv.obj.FLAG.CLICKABLE)
-    _preview.add_event(_on_preview_clicked, lv.EVENT.CLICKED, None)
 
     _bottom_bar = lv.obj(screen)
     _bottom_bar.set_size(lv.pct(100), BAR_H)
