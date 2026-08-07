@@ -93,7 +93,9 @@ def _draw_skeleton(img, boxes, kpses):
         w = _clamp(int(r - l), 1, DISPLAY_SIZE[0] - x)
         h = _clamp(int(b - t), 1, DISPLAY_SIZE[1] - y)
         img.draw_rectangle(x, y, w, h, color=(0xFF, 0xFF, 0xFF, 0xFF), thickness=2)
-        if len(kps) < 19:
+        # aidemo 返回 COCO 17 关键点(坐标+score);demo 的 range(17+2) 是画
+        # 19 条骨骼线,不是 19 个点——只要求 17 点,否则整人跳过只剩框
+        if len(kps) < 17:
             continue
         for k in range(len(SKELETON)):
             if k < len(KPS_COLORS):
