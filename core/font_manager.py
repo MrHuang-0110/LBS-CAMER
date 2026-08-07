@@ -42,20 +42,19 @@ class FontManager:
     def __init__(self):
         self._fonts = {}
         self._loaded = False
+        self._probed = False   # Phase2 探测缓存(load/load_all 共用)
+        self._use_phase2 = True
 
-    def load_all(self):
-        """加载全部预设字体。
+    def _probe_phase2(self):
+        """探测 Phase 2 字体是否齐全（只探测一次，缓存结果）。
 
-        Phase 2 字体优先（含中文），不存在时自动回退到 demo 字体。
+        ⚠️ MicroPython 的 dict 不保证插入顺序，不能用 values()[0] 取"第一个"。
+        改为：只要每个 Phase2 文件都能 open 成功，才用 Phase2；任一缺失则回退。
         """
-        if self._loaded:
-            return
-
-        # 探测 Phase 2 字体是否齐全（逐个检查，不依赖 dict 顺序）。
-        # ⚠️ MicroPython 的 dict 不保证插入顺序,不能用 values()[0] 取"第一个"。
-        # 改为：只要每个 Phase2 文件都能 open 成功,才用 Phase2;任一缺失则回退。
+        if self._probed:
+            return self._use_phase2
         use_phase2 = True
-        for level, filename in PHASE2_FONT_MAP.items():
+        for filename in PHASE2_FONT_MAP.values():
             fs_path = FONT_FS_PATH + filename
             try:
                 with open(fs_path, "rb") as _f:
@@ -64,27 +63,52 @@ class FontManager:
             except Exception as e:
                 print(f"[Font] probe MISSING: {fs_path} ({e})")
                 use_phase2 = False
+        self._probed = True
+        self._use_phase2 = use_phase2
+        return use_phase2
 
+    def _load_level(self, level, font_map):
+        """加载单个字体 level 到 self._fonts。失败置 None（UI 层自行兜底）。"""
+        filename = font_map.get(level)
+        if filename is None:
+            self._fonts[level] = None
+            return
+        path = FONT_PATH + filename
+        try:
+            print(f"[Font]   loading {level}: {path}")
+            f = lv.font_load(path)
+            if f is None or f == 0:
+                print(f"[Font]   {level}: {filename} load returned None/0 — font unusable")
+                self._fonts[level] = None
+            else:
+                self._fonts[level] = f
+                print(f"[Font]   {level}: {filename} OK (id={id(f) if hasattr(f, '__hash__') else hex(f) if isinstance(f, int) else 'ptr'})")
+        except Exception as e:
+            print(f"[Font] load {path} failed: {e}")
+            self._fonts[level] = None
+
+    def load(self, *levels):
+        """按需加载指定字体 level（切换提速 2026-08-07）。
+
+        脚本模式只加载 UI 实际用到的字体（默认 body，color/road 补 caption），
+        不加载 title 50px，缩短每次进脚本的耗时。主菜单仍走 load_all。
+        """
+        if self._loaded:
+            return
+        use_phase2 = self._probe_phase2()
         font_map = PHASE2_FONT_MAP if use_phase2 else DEMO_FONT_MAP
         phase_label = "Phase2" if use_phase2 else "Demo"
-        print(f"[Font] using {phase_label} fonts")
-
-        for level, filename in font_map.items():
-            path = FONT_PATH + filename
-            try:
-                print(f"[Font]   loading {level}: {path}")
-                f = lv.font_load(path)
-                if f is None or f == 0:
-                    print(f"[Font]   {level}: {filename} load returned None/0 — font unusable")
-                    self._fonts[level] = None
-                else:
-                    self._fonts[level] = f
-                    print(f"[Font]   {level}: {filename} OK (id={id(f) if hasattr(f, '__hash__') else hex(f) if isinstance(f, int) else 'ptr'})")
-            except Exception as e:
-                print(f"[Font] load {path} failed: {e}")
-                self._fonts[level] = None
-
+        print(f"[Font] using {phase_label} fonts (on-demand: {', '.join(levels)})")
+        for level in levels:
+            self._load_level(level, font_map)
         self._loaded = True
+
+    def load_all(self):
+        """加载全部预设字体（主菜单：title + body + caption）。
+
+        Phase 2 字体优先（含中文），不存在时自动回退到 demo 字体。
+        """
+        self.load("title", "body", "caption")
 
     # ── 字体引用 ──────────────────────────────────────
 

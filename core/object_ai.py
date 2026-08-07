@@ -18,8 +18,9 @@ from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
-# AI 通道分辨率(chn2 VGA 640x480,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
-# 持续搬运与显示 DMA 竞争累积致几分钟死机;det 输入 320x320 用 VGA 足够)
+# 推理帧分辨率(单通道 2026-08-07:AI 直接吃 chn0 显示帧 VGA 640x480,无独立
+# 推理通道;历史 chn2 XGA 2.25MB/帧硬件 DMA 与显示 DMA 竞争累积致几分钟死机,
+# 已随 object_detect 单通道化根治;det 输入 320x320 用 VGA 足够)
 RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 

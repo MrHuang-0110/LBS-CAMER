@@ -1,9 +1,9 @@
 # scripts/object_detect/app.py — YOLOv8n COCO80 物体识别。
 #
-# 复用 _template 单线程主循环。chn2 XGA RGBP888 做 AI 推理(同 face_detect),
-# chn0 VGA RGB888 显示。底栏仅左侧 list 图标(清除/保存浮层)+ 计数。KEY2 按类别
-# 注册(最多4类),走 object_db.register via registrar。注册框显示 ID号+英文类名,
-# 未注册白框。协议类型 0x05 上传4槽位。持久化预留(flush_to_disk no-op)。
+# 复用 _template 单线程主循环。单通道(死机根治 2026-08-07):AI 直接吃 chn0
+# VGA RGB888 显示帧推理(官方 ai_lvgl 同构),无 chn2 DMA 竞争。底栏仅左侧 list
+# 图标(清除/保存浮层)。KEY2 按类别注册,走 object_db.register via
+# registrar。注册框显示 ID号+英文类名,未注册白框。协议类型 0x05 上传槽位。
 
 import gc
 import os
@@ -11,7 +11,7 @@ import sys
 import time
 import lvgl as lv
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
+from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
@@ -27,12 +27,12 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-# 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+det),其余帧用缓存结果
-# 画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
+# 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框
 DET_INTERVAL = 2
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
+# 单通道:推理帧 = 显示帧 = chn0 VGA 640x480(与 AI 通道分辨率 RGB888P_SIZE 一致)
 RGB888P_W = 640
 RGB888P_H = 480
 DISPLAY_W = 640
@@ -47,12 +47,18 @@ def _draw_color(hex_color):
     return (0xFF, b, g, r)
 
 
+def _rect_area(det):
+    """检测框面积 (r-l)*(b-t)，每类取最大实例用。"""
+    return (det[2] - det[0]) * (det[3] - det[1])
+
+
 _RUNTIME = None
 _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
-_id_registry = None_object_det = None
+_id_registry = None
+_object_det = None
 _db = None
 _overlay = None
 _clear_btn = None
@@ -72,7 +78,7 @@ def _init_ai():
         print("[object_detect] loading det kmodel...")
         _object_det = ObjectDetectionApp(
             KMODEL_PATH, labels=COCO_LABELS, model_input_size=[320, 320],
-            max_boxes_num=20, confidence_threshold=0.5, nms_threshold=0.2,
+            max_boxes_num=20, confidence_threshold=0.3, nms_threshold=0.2,
             rgb888p_size=[RGB888P_W, RGB888P_H], display_size=[DISPLAY_W, DISPLAY_H],
             debug_mode=0)
         _object_det.config_preprocess()
@@ -101,32 +107,33 @@ def _deinit_ai():
 
 
 def on_frame(img):
-    """chn2 检测 -> 每类取最大实例 -> 匹配 DB -> 画框 -> 十字 -> host_tick。
+    """单通道检测 -> 每类取最大实例 -> 匹配 DB -> 画框 -> 十字 -> host_tick。
 
-    每类别取面积最大实例画框+填槽(协议每槽一坐标)。注册类彩色框+ID号+英文类名,
+    AI 直接吃传入的 chn0 显示帧(img.to_numpy_ref),无 chn2 独立帧(死机根治
+    2026-08-07)。每类别取面积最大实例画框+填槽,注册类彩色框+ID号+英文类名,
     未注册白框。KEY2 注册当前帧最大框的类别。
     """
     if _RUNTIME is None or _object_det is None:
         return
-    global _det_counter, _last_max, _last_slots
+    global _det_counter, _last_max, _last_slots, _last_names
     per_class_max = _last_max
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, COCO 类别名)],仅已注册槽位
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-        img_np = img_ai.to_numpy_ref()
+        # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
+        # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
+        # img 持有至 show_image。
+        img_np = img.to_numpy_ref()
         try:
             dets = _object_det.run(img_np)
         except Exception as e:
             print("[object_detect] run error: %s" % e)
             dets = []
-        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
-        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        # 推理完成立即释放 numpy 视图引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
         del img_np
-        del img_ai
-        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
+        gc.collect()
         # 每类别取面积最大实例
         per_class_max = {}   # class_id -> [l,t,r,b,score,cid]
         for det in dets:
@@ -135,15 +142,14 @@ def on_frame(img):
             except Exception:
                 continue
             cid = int(cid)
-            area = (r - l) * (b - t)
+            rect = [l, t, r, b, score, cid]
             cur = per_class_max.get(cid)
-            if cur is None or area > (cur[2] - cur[0]) * (cur[3] - cur[1]):
-                per_class_max[cid] = [l, t, r, b, score, cid]
+            if cur is None or _rect_area(rect) > _rect_area(cur):
+                per_class_max[cid] = rect
         _last_max = per_class_max
         # KEY2 注册:当前帧最大框的类别(检测帧才有新鲜 dets)
         if _id_registry is not None and _id_registry.has_pending() and per_class_max:
-            max_cid = max(per_class_max.values(),
-                          key=lambda d: (d[2] - d[0]) * (d[3] - d[1]))[5]
+            max_cid = max(per_class_max.values(), key=_rect_area)[5]
             try:
                 slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
                                                  registrar=_db.register)
@@ -182,7 +188,7 @@ def on_frame(img):
     else:
         _last_slots = slots
         _last_names = names
-    if _RUNTIME is not None and _RUNTIME.host is not None:
+    if _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots, names)
 
 
@@ -456,7 +462,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[object_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    import gc as _gc; print("[object_detect] mem_free=%d" % _gc.mem_free())
+                    print("[object_detect] mem_free=%d" % gc.mem_free())
     finally:
         _deinit_ai()
         _destroy_ui()

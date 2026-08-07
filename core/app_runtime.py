@@ -191,7 +191,9 @@ class AppRuntime:
         ⚠️ init 顺序对齐裸跑 test_face_baseline_camerai_sensor.py media_init：
         Display.init → Sensor/reset/配通道 → MediaManager.init → sensor.run。
         （之前 sensor 配置在 Display.init 前，与裸跑相反，致 face_detect 卡 fc~8。）
+        耗时插桩(2026-08-07)：各阶段 ticks_ms 打点，板端看切换耗时分布再优化。
         """
+        _t0 = time.ticks_ms()
         self.fpioa = fpioa
         self.category_id = category_id
         channels = self._channels_for(category_id)
@@ -199,10 +201,13 @@ class AppRuntime:
         self.display = Display()
         self.display.init(Display.ST7701, self.width, self.height,
                           to_ide=False, osd_num=2, quality=100)
+        print("[Runtime] init Display: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         # 2. Sensor 配置（Display.init 后、MediaManager.init 前）
         self._config_sensor(channels)
+        print("[Runtime] init sensor: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         # 3. MediaManager.init（sensor 配置后）
         MediaManager.init()
+        print("[Runtime] init MediaManager: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         self._init_backlight(fpioa)
         # render mode 统一 FULL：flush_cb 每次清零非活跃缓冲，只在 FULL(整屏重绘)
         # 下安全；PARTIAL 只刷脏区，清零会抹掉持久 UI(顶栏等)——见 hw/lcd.py 注释。
@@ -211,12 +216,20 @@ class AppRuntime:
         # 板端验证稳定)，故 stream/page 统一 FULL。对齐官方 ai_lvgl.py + hw/lcd.py。
         lv.init()
         self._lvgl_init(lv.DISP_RENDER_MODE.FULL)
+        print("[Runtime] init lvgl: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         self._init_touch()
         from core.font_manager import fonts
         try:
-            fonts.load_all()
+            # 切换提速(2026-08-07)：脚本 UI 只用 body，color_detect/road_detect
+            # 补 caption；不再全量加载字体（省 title 50px + Phase2 探测）。
+            # 主菜单仍走全量加载。
+            if category_id in ("color_detect", "road_detect"):
+                fonts.load("body", "caption")
+            else:
+                fonts.load("body")
         except Exception as e:
             print("[Runtime] font load warning: %s" % e)
+        print("[Runtime] init fonts: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         # 预读脚本图标（task_handler 前完成文件 I/O，坑#2）：
         #   back 图标 — 所有脚本顶栏返回钮共用
         #   camera 图标 — camera 顶栏返回/底栏图库·模式钮用（仅 camera 需要）
@@ -241,9 +254,11 @@ class AppRuntime:
         elif category_id == "object_classify":
             icon_cache.preload_object_classify_icons()
         self._init_services(fpioa)
+        print("[Runtime] init services: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
         # sensor.run 紧贴脚本主循环（消费者就绪后才 run，避免缓冲满卡死）
         self.sensor.run()
         self._sensor_running = True
+        print("[Runtime] init_app total: %d ms" % time.ticks_diff(time.ticks_ms(), _t0))
 
     def _channels_for(self, category_id):
         """按 category 决定 sensor 通道配置。"""
@@ -258,9 +273,9 @@ class AppRuntime:
             # chn0 VGA RGB888 显示。rect ×2 映射显示（QVGA→VGA 整数缩放）。
             chs.append((CAM_CHN_ID_1, Sensor.QVGA, Sensor.RGB565))
         elif category_id == "object_detect":
-            # chn2 VGA RGBP888 做 AI 推理(同 face_detect,死机修复降 VGA);
-            # chn0 VGA RGB888 显示。检测框 rgb888p->display 整数缩放。
-            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
+            # 单通道(死机根治 2026-08-07):仅 chn0 VGA RGB888 显示+AI 推理,
+            # 无 chn2 大帧 DMA 竞争(官方 ai_lvgl 同构)。
+            pass
         elif category_id == "color_detect":
             # chn1 QVGA RGB565 专做 find_blobs 颜色检测(同 tag_detect)；
             # chn0 VGA RGB888 显示+取色。blob rect ×2 映射显示(QVGA→VGA)。
