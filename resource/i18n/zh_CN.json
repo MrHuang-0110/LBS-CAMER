@@ -16,8 +16,8 @@
     "road_detect_desc": "车道线与循线",
     "gesture_detect": "手势识别",
     "gesture_detect_desc": "识别手部手势",
-    "body_detect": "人体识别",
-    "body_detect_desc": "人体检测与姿态",
+    "body_detect": "人体姿态",
+    "body_detect_desc": "人体姿态识别",
     "object_classify": "物体分类",
     "object_classify_desc": "对物体进行分类",
     "image_classify": "图像分类",
@@ -89,14 +89,6 @@
     "press_k2": "按K2注册手势",
     "back_fb": "<",
     "list_fb": "="
-  },
-  "body_detect": {
-    "save": "保存",
-    "clear": "清除",
-    "save_success": "已保存",
-    "press_k2": "按 K2 注册人体",
-    "back_fb": "返回",
-    "list_fb": "列表"
   },
   "object_classify": {
     "save": "保存",

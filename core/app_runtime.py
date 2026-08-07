@@ -288,8 +288,10 @@ class AppRuntime:
             # chn2 SVGA RGBP888 做 AI 推理(死机修复降 SVGA 800x600,输入 512 够用)
             chs.append((CAM_CHN_ID_2, Sensor.SVGA, Sensor.RGBP888))
         elif category_id == "body_detect":
-            # chn2 XGA RGBP888 保持(模型输入 640x640 需 >=640 高,降分辨率不可行)
-            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
+            # 单通道(死机根治 2026-08-07,同 object_detect):换 yolov8n-pose
+            # 姿态模型(输入 320x320)后仅 chn0 VGA RGB888 显示+AI 推理,
+            # 无 chn2 大帧 DMA 竞争。
+            pass
         elif category_id == "object_classify":
             # 单通道(死机根治 2026-08-07,同 object_detect):仅 chn0 VGA
             # RGB888 显示+AI 推理(det 320 + rec 224 够用),无 chn2 大帧 DMA 竞争。

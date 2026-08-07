@@ -16,8 +16,8 @@
     "road_detect_desc": "Lane & line follow",
     "gesture_detect": "Gesture",
     "gesture_detect_desc": "Hand gesture",
-    "body_detect": "Body",
-    "body_detect_desc": "Body detection",
+    "body_detect": "Body Pose",
+    "body_detect_desc": "Body pose detection",
     "object_classify": "Obj Classify",
     "object_classify_desc": "Object classification",
     "image_classify": "Img Classify",
@@ -89,14 +89,6 @@
     "press_k2": "Press K2 to register gesture",
     "back_fb": "<",
     "list_fb": "="
-  },
-  "body_detect": {
-    "save": "Save",
-    "clear": "Clear",
-    "save_success": "Saved",
-    "press_k2": "Press K2 to register body",
-    "back_fb": "Back",
-    "list_fb": "List"
   },
   "object_classify": {
     "save": "Save",
