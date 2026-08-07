@@ -1,16 +1,17 @@
 # scripts/object_classify/app.py — 物体分类(双 kmodel + 点击锁定 + K2 注册 4 槽 + 协议 0x0A)
 #
-# 复刻 body_detect 模式: chn2 YOLOv8n 检测任意物体 + recognition 提特征
-# → database_search 余弦匹配分辨 ID → 画框 + ID 标签 → host_tick。
-# 增量: 点预览区任意物体锁定(只跟踪该物体,特征余弦逐帧匹配);K2 注册锁定物体进 4 槽。
+# 单通道(死机根治 2026-08-07,同 object_detect): AI 直接吃 chn0 显示帧,
+# det(YOLOv8n) + rec(recognition) 共用同一帧。点预览区任意物体锁定;K2
+# 注册锁定物体进 4 槽。
 
 import gc
 import os
 import sys
 import time
 import lvgl as lv
+import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
+from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
@@ -30,8 +31,7 @@ from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
 BOX_LOCK = 0xFFD700      # 锁定高亮黄框
-# 检测降频:每 DET_INTERVAL 帧跑一次 NPU(chn2 取流+run),其余帧用缓存
-# det_boxes/features/disp_boxes 画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
+# 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果
 DET_INTERVAL = 2
 
 
@@ -114,7 +114,7 @@ def on_frame(img):
     LOCK);低于阈值 → 锁定丢失,自动解锁。未锁定:每框 database_search,命中槽画彩框+
     ID#,未命中白框。触摸点击命中框 → 锁定该框特征;点空白 → 解锁。K2 注册当前锁定特征。
     """
-    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots
+    global _locked_feature, _pending_click, _det_counter, _last_det, _last_disp, _last_slots, _last_names
     if _RUNTIME is None or _ocr is None:
         return
     det_boxes, features = _last_det
@@ -122,19 +122,28 @@ def on_frame(img):
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-        img_np = img_ai.to_numpy_ref()
+        # 单通道(死机根治 2026-08-07):AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争
+        img_np = img.to_numpy_ref()
+        # packed RGB888 -> planar CHW: ai2d 若支持 packed 输入枚举(RGB888p_FMT)
+        # 则零拷贝直接喂,否则 NCHW(planar 语义)须逐通道重排(2026-08-07 全屏
+        # 假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
+        if not _ocr.input_is_packed:
+            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
+            _planar[0] = img_np[:, :, 0]
+            _planar[1] = img_np[:, :, 1]
+            _planar[2] = img_np[:, :, 2]
+            img_np = _planar
         try:
             det_boxes, features = _ocr.run(img_np)
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
         _last_det = (det_boxes, features)
-        # 推理完成立即清 chn2 大帧引用:帧内 gc 及时回收 2.25MB 原生缓冲,
-        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
+        if not _ocr.input_is_packed:
+            del _planar
         del img_np
-        del img_ai
-        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
+        gc.collect()
         # 检测框(rgb888p) → 显示坐标(VGA)
         disp_boxes = []
         for d in det_boxes:

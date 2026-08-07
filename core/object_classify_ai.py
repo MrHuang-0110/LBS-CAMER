@@ -18,11 +18,11 @@ import ulab.numpy as np
 from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
-from core.object_ai import ObjectDetectionApp, COCO_LABELS
+from core.object_ai import ObjectDetectionApp, COCO_LABELS, configure_ai2d_input
 
-# AI 通道分辨率(对齐 body_detect/object_detect 的 chn2 XGA RGBP888)
-# AI 通道分辨率(chn2 VGA 640x480,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
-# 持续搬运与显示 DMA 竞争累积致几分钟死机;det 320 + rec 224 用 VGA 足够)
+# 推理帧分辨率(单通道 2026-08-07:AI 直接吃 chn0 显示帧 VGA 640x480,无独立
+# 推理通道;历史 chn2 XGA 2.25MB/帧硬件 DMA 与显示 DMA 竞争累积致几分钟死机,
+# 已随 object_classify 单通道化根治;det 320 + rec 224 用 VGA 足够)
 RGB888P_SIZE = [640, 480]
 DISPLAY_SIZE = [640, 480]
 
@@ -61,8 +61,7 @@ class FeatureExtractionApp(AIBase):
         self.crop_params = []
         self.debug_mode = debug_mode
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
-                                 np.uint8, np.uint8)
+        self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, det_box, input_image_size=None):
         gc.collect()
@@ -149,6 +148,9 @@ class ObjectClassifyRecognition:
             rgb888p_size=self.rgb888p_size, display_size=self.display_size,
             debug_mode=0)
         self.detector.config_preprocess()
+        # 单通道(死机根治 2026-08-07):AI 吃 chn0 显示帧;det 与 feature 共用
+        # 同一输入格式(packed 零拷贝 or planar 重排),app 按此分支。
+        self.input_is_packed = self.detector.input_is_packed
 
     def run(self, img_np):
         """推理当前帧。返回 (det_res, feat_res) 等长(≤max_boxes)。

@@ -291,8 +291,9 @@ class AppRuntime:
             # chn2 XGA RGBP888 保持(模型输入 640x640 需 >=640 高,降分辨率不可行)
             chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "object_classify":
-            # chn2 VGA RGBP888 做 AI 推理(死机修复降 VGA,输入 320/224 够用)
-            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
+            # 单通道(死机根治 2026-08-07,同 object_detect):仅 chn0 VGA
+            # RGB888 显示+AI 推理(det 320 + rec 224 够用),无 chn2 大帧 DMA 竞争。
+            pass
         elif category_id == "image_classify":
             # 暂时单通道 chn0 VGA RGB888 预览(不跑AI)。
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并在此附加 chn2 AI 通道。
