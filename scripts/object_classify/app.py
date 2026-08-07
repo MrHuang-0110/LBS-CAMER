@@ -84,6 +84,13 @@ def _to_disp_boxes(det_boxes):
     return disp
 
 
+def _draw_preview_box(img, color, thickness):
+    """画预览区四边框,底部内收 thickness:线宽向边界外扩,底边外扩
+    部分落在底栏(428 起不透明)内被盖住→底部线看不见(2026-08-07)。"""
+    img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1 - thickness,
+                       color=color, thickness=thickness)
+
+
 _RUNTIME = None
 _screen = None
 _top_bar = None
@@ -168,8 +175,7 @@ def on_frame(img):
     # 注册成功确认(闪烁若干帧,K2 学习反馈):预览区槽位色框 + 左上角槽位色 ID
     if _record_flash > 0:
         flash_color = _draw_color(BOX_COLORS.get(_record_slot, BOX_UNKNOWN))
-        img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
-                           color=flash_color, thickness=6)
+        _draw_preview_box(img, flash_color, 6)
         if _record_slot is not None:
             tag = "ID%d" % _record_slot
             img.draw_string_advanced(8, PREVIEW_Y + 4, 24, tag, color=flash_color)
@@ -227,8 +233,7 @@ def on_frame(img):
 
     if best is not None:
         # 预览区四边全局框(识别激活指示),框色 = 最佳命中槽位色
-        img.draw_rectangle(0, PREVIEW_Y, PREVIEW_X1, PREVIEW_Y1,
-                           color=_draw_color(BOX_COLORS.get(best[1], BOX_UNKNOWN)), thickness=4)
+        _draw_preview_box(img, _draw_color(BOX_COLORS.get(best[1], BOX_UNKNOWN)), 4)
         label_x = 8
         for i, slot, sc in hits:
             x, y, w, h = disp_boxes[i]
