@@ -86,9 +86,10 @@ def _to_disp_boxes(det_boxes):
 
 def _draw_preview_box(img, color, thickness):
     """画预览区四边框。K230 draw_rectangle 参数为 (x, y, w, h) 而非对角坐标:
-    误按 x1/y1 传参会把宽高当对角点,底部线画到底栏内被盖(2026-08-07 根因);
-    传宽=屏宽、高=预览区高时四边贴可视区,线宽向内扩展全可见。"""
-    img.draw_rectangle(0, PREVIEW_Y, DISPLAY_SIZE[0], PREVIEW_H,
+    误按 x1/y1 传参把宽高当对角点→底部线画到底栏内被盖;宽=屏宽、高=预览区
+    高时右边界 x=640 越界 1px 偶发驱动挂死(2026-08-07 死机根因),故宽高各
+    减 1 保证四边全在 OSD1 内且底部线可见。"""
+    img.draw_rectangle(0, PREVIEW_Y, DISPLAY_SIZE[0] - 1, PREVIEW_H - 1,
                        color=color, thickness=thickness)
 
 
@@ -232,6 +233,8 @@ def on_frame(img):
             hits.append((i, slot, sc))
             if best is None or sc > best[2]:
                 best = (i, slot, sc)
+    if do_det:
+        print("[object_classify] MATCH hits=%d" % len(hits))  # 插桩:定位死机挂点
 
     if best is not None:
         # 预览区四边全局框(识别激活指示),框色 = 最佳命中槽位色
@@ -248,6 +251,8 @@ def on_frame(img):
             label_x += len(tag) * 24 + 8
     # 十字架固定屏幕中央不动(对准参考):VGA 640×480 中心 (320, 240)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
+    if do_det:
+        print("[object_classify] DRAW")  # 插桩:定位死机挂点
 
     # 非检测帧:复用上轮槽位,保持主机数据连续(须在 host_tick 前)
     if not do_det and _last_slots is not None:
@@ -258,6 +263,8 @@ def on_frame(img):
         _last_names = names
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots, names)
+    if do_det:
+        print("[object_classify] TICKED")  # 插桩:定位死机挂点
 
 
 def _learn_center(img):
