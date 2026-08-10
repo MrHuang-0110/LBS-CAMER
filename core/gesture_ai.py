@@ -35,6 +35,9 @@ GESTURE_RECO_KMPATH = "/sdcard/examples/kmodel/recognition.kmodel"
 HAND_ANCHORS = [26, 27, 53, 52, 75, 71, 80, 99, 106, 82,
                 99, 134, 140, 113, 161, 172, 245, 276]
 
+# 每帧最多提特征的手掌数(防手多/误检时 NPU 推理次数暴涨,2026-08-10 死机排查)
+REG_MAX_HANDS = 4
+
 
 def ALIGN_UP(x, align=16):
     return (x + align - 1) // align * align
@@ -274,7 +277,9 @@ class HandRecognition:
         det_boxes = self.hand_det.run(img_np)
         hand_det_res = []
         hand_feats = []
-        for det_box in det_boxes:
+        # 每帧最多提特征的手掌数(同 face_detect REG_MAX_FACES 截断):手多/误检
+        # 多时防 feature 推理次数暴涨 → NPU 负载与温度失控(2026-08-10 死机排查)
+        for det_box in det_boxes[:REG_MAX_HANDS]:
             x1, y1, x2, y2 = det_box[2], det_box[3], det_box[4], det_box[5]
             w, h = int(x2 - x1), int(y2 - y1)
             # 边界过滤(同 demo)
