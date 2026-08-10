@@ -12,7 +12,7 @@ import time
 import lvgl as lv
 import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
+from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.face_ai import FaceDetectionApp, FaceRegistrationApp, RGB888P_SIZE, DISPLAY_SIZE
@@ -202,15 +202,15 @@ def on_frame(img):
     do_det = (_det_counter % cooled_interval(
         _det_interval(_last_had_face), _thermal_mode) == 0)
     if do_det:
-        # 检测帧才取 chn2 帧:非检测帧跳过 chn2 大分辨率(1024x768) DMA 取流,
-        # 减半其与显示 DMA(OSD1+OSD2 flush)的竞争——第一轮插桩证据:
-        # 死机在 pre-show(显示侧)且 DIAG_SKIP_AI(跳 chn2)不死机
-        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-        img_np = img_ai.to_numpy_ref()
+        # 检测帧才取 AI 输入(chn0 显示帧的 numpy 视图):非检测帧跳过 det,
+        # 减 NPU 推理与显示 DMA 竞争
+        # 单通道(2026-08-10):AI 直接吃 chn0 显示帧(同 object/gesture/body),
+        # 无 chn2 双路 ISP + 每检测帧 snapshot(隐藏热源,官方单路同构)
+        img_np = img.to_numpy_ref()
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
         gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
-        # 检测坐标(chn2 1024x768)→ VGA 640x480 缩放因子,识别/注册共用
+        # 检测坐标(chn0 VGA 640x480)→ VGA 640x480 缩放因子(=1),识别/注册共用
         disp_w, disp_h = _face_det.display_size
         rgb_w, rgb_h = _face_det.rgb888p_size
         # 识别判定仅在检测帧(有新鲜 det 结果与 img_np):按人数降频,K2 注册强制。
@@ -293,10 +293,9 @@ def on_frame(img):
                               int(det[1] * disp_h // rgb_h),
                               int(det[2] * disp_w // rgb_w),
                               int(det[3] * disp_h // rgb_h), 100))
-        # 识别/注册全部完成:立即清 chn2 大帧引用(2.25MB 原生缓冲),
-        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        # 识别/注册全部完成:立即释放 numpy 视图引用,缩短其与显示 DMA
+        # (OSD1 show_image + OSD2 LVGL FULL flush)的共存期
         del img_np
-        del img_ai
     else:
         do_reg = False
     # 非识别帧:按中心最近邻把缓存 ID 关联到新框(防旧结果贴错新框窜脸;
@@ -560,10 +559,12 @@ def run(runtime):
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
     fc = 0
+    _perf_t = time.ticks_us()  # 每帧分段耗时插桩(诊断用,2026-08-10)
     try:
         while not exit_flag[0]:
             os.exitpoint()
             img = runtime.sensor.snapshot(chn=CAM_CHN_ID_0)
+            _p1 = time.ticks_us()
             try:
                 on_frame(img)
             except Exception as e:
@@ -572,6 +573,7 @@ def run(runtime):
                     sys.print_exception(e)
                 except Exception:
                     pass
+            _p2 = time.ticks_us()
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
@@ -579,13 +581,22 @@ def run(runtime):
                 _pending_clear_flush = False
                 face_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口,防断电/异常退出后旧数据回魂)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+            _p3 = time.ticks_us()
             gc.collect()  # 放在 show_image 之后、task_handler 之前，避免 AI 推理后立即 GC 阻塞 DMA
-            time.sleep_ms(lv.task_handler())
+            _p4 = time.ticks_us()
+            _lv_wait = lv.task_handler()
+            _p4b = time.ticks_us()
+            time.sleep_ms(_lv_wait)
+            _p5 = time.ticks_us()
             fc += 1
             if fc % 30 == 0:
+                print("[perf] snap=%d on=%d show=%d gc=%d lvtask=%d sleep=%d total=%d" % (
+                    _p1 - _perf_t, _p2 - _p1, _p3 - _p2,
+                    _p4 - _p3, _p4b - _p4, _p5 - _p4b, _p5 - _perf_t))
                 print("[face_detect] fc=%d" % fc)
                 if fc % 300 == 0:
                     print(diag_line("[face_detect]", fc))
+            _perf_t = time.ticks_us()
     finally:
         _deinit_ai()
         _destroy_ui()

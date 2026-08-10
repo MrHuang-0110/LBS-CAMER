@@ -264,8 +264,10 @@ class AppRuntime:
         """按 category 决定 sensor 通道配置。"""
         chs = [(CAM_CHN_ID_0, Sensor.VGA, Sensor.RGB888)]
         if category_id == "face_detect":
-            # chn2 VGA RGBP888 做 AI 推理(死机修复 2026-08-06:chn2 降 VGA 减 DMA,输入 320 够用)
-            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
+            # 单通道(死机排查 2026-08-10):仅 chn0 VGA RGB888 显示+AI 推理,
+            # 无 chn2 双路 ISP(隐藏热源)+每检测帧 snapshot(同 object/gesture/
+            # body 方案)。face_det 320/reg 112 输入 VGA 源够用。
+            pass
         elif category_id == "camera":
             chs.append((CAM_CHN_ID_1, Sensor.SXGAM, Sensor.RGB565))
         elif category_id == "tag_detect":
