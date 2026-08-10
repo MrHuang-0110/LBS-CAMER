@@ -24,9 +24,13 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
-# 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测一次(框滞后≤1帧),降 NPU+GC 负载提帧率
-# 2026-08-10 死机排查: 2→3(det 每秒 10→6.7 次 @20fps,防 NPU 满载温度稳态 100°C)
-DET_IDLE_INTERVAL = 3
+# 检测降频自适应(2026-08-10 死机排查):无脸低频/有脸高频
+# - 静止无脸场景(实测主场景)只跑 det 单模型,温度随运行累积到 100°C 死机;
+#   DET_INTERVAL_IDLE=6 → det 每秒 10→3.3 次(@20fps),负载降 2/3,防过热
+# - 有脸场景 DET_INTERVAL_ACTIVE=2 保持实时(框延迟≤1 帧)
+# 业务功能不变(检测到脸后自动回到高频,人离开自动降频)
+DET_INTERVAL_ACTIVE = 2  # 检测到脸:每 2 帧检测一次(实时)
+DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
@@ -54,7 +58,8 @@ _save_btn = None
 _close_overlay = False
 _reg_counter = 0     # 识别跳帧计数(每 reg_interval 帧识别一轮)
 _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
-_det_counter = 0     # 检测跳帧计数(每 DET_IDLE_INTERVAL 帧检测一次)
+_det_counter = 0     # 检测跳帧计数(每自适应间隔帧检测一次)
+_last_had_face = True  # 上轮检测是否有脸(自适应间隔:有脸高频/无脸低频)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
 _last_track = []        # 识别帧目标缓存[(cx, cy, mid), ...]:非识别帧最近邻关联画 ID 框
@@ -162,6 +167,11 @@ def _associate_to_tracked(det_boxes, tracked, radius):
     return results
 
 
+def _det_interval(had_face):
+    """自适应检测间隔:有脸保持实时(ACTIVE),无脸降频降温(IDLE)。"""
+    return DET_INTERVAL_ACTIVE if had_face else DET_INTERVAL_IDLE
+
+
 def on_frame(img):
     """Detect on chn2, recognize ALL faces, draw onto chn0 preview, push 4 slots.
 
@@ -171,13 +181,13 @@ def on_frame(img):
     """
     if _RUNTIME is None or _face_det is None:
         return
-    global _reg_counter, _last_slots, _det_counter, _last_det, _last_track
+    global _reg_counter, _last_slots, _det_counter, _last_det, _last_track, _last_had_face
     det_boxes, landms = _last_det
     recognition_results = []
     slots = []  # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
-    # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测(框滞后≤1帧)
+    # 检测降频自适应:无脸低频(静止场景防过热),有脸高频(框延迟≤1 帧)
     _det_counter += 1
-    do_det = (_det_counter % DET_IDLE_INTERVAL == 0)
+    do_det = (_det_counter % _det_interval(_last_had_face) == 0)
     if do_det:
         # 检测帧才取 chn2 帧:非检测帧跳过 chn2 大分辨率(1024x768) DMA 取流,
         # 减半其与显示 DMA(OSD1+OSD2 flush)的竞争——第一轮插桩证据:
@@ -193,6 +203,7 @@ def on_frame(img):
         # 识别判定仅在检测帧(有新鲜 det 结果与 img_np):按人数降频,K2 注册强制。
         # ⚠️ 不可放检测块外:do_reg 若落在非检测帧,img_np 未定义 → NameError
         n_faces = len(det_boxes) if det_boxes else 0
+        _last_had_face = n_faces > 0  # 更新自适应间隔状态(无脸→下次低频)
         k2_pending = _id_registry is not None and _id_registry.has_pending()
         reg_interval = REG_INTERVAL_1
         if n_faces >= 4:
