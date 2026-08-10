@@ -19,7 +19,8 @@ from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.thermal import thermal_mode, cooled_interval
 from core.id_registry import IdRegistry
 from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
@@ -60,6 +61,8 @@ _clear_btn = None
 _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整 run)
+_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
+_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_det = ([], [])      # 上轮 (det_boxes, feats) 缓存
 _last_rec = {}            # 上轮识别结果 {det_idx: slot}
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
@@ -146,14 +149,23 @@ def on_frame(img):
     检测/识别一体降频(DET_INTERVAL):run 后立即 gc 回收原生缓冲,防坑#16。
     """
     global _det_counter, _last_det, _last_rec, _last_slots, _last_names
+    global _thermal_mode, _thermal_counter
     if _RUNTIME is None or _hand_rec is None:
         return
     det_boxes, feats = _last_det
     rec = _last_rec
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, 固定名 GESTURE)],仅已注册槽位
+    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
+    _thermal_counter += 1
+    if _thermal_counter % 30 == 0:
+        _new_mode = thermal_mode(read_temperature())
+        if _new_mode != _thermal_mode:
+            if _new_mode:
+                print("[gesture_detect] thermal mode=%d" % _new_mode)
+            _thermal_mode = _new_mode
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
     if do_det:
         # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环

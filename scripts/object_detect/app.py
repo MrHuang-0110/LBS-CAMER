@@ -19,7 +19,8 @@ from core.id_registry import IdRegistry
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 from core.object_db import ObjectDB
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.thermal import thermal_mode, cooled_interval
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -69,6 +70,8 @@ _clear_btn = None
 _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
+_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
+_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_max = {}            # 上轮 per_class_max 缓存(非检测帧画框用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
@@ -120,11 +123,20 @@ def on_frame(img):
     if _RUNTIME is None or _object_det is None:
         return
     global _det_counter, _last_max, _last_slots, _last_names
+    global _thermal_mode, _thermal_counter
     per_class_max = _last_max
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, COCO 类别名)],仅已注册槽位
+    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
+    _thermal_counter += 1
+    if _thermal_counter % 30 == 0:
+        _new_mode = thermal_mode(read_temperature())
+        if _new_mode != _thermal_mode:
+            if _new_mode:
+                print("[object_detect] thermal mode=%d" % _new_mode)
+            _thermal_mode = _new_mode
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
     if do_det:
         # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环

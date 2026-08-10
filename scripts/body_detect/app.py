@@ -20,7 +20,8 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.body_ai import PersonKeyPointApp, PERSON_KP_KMPATH, \
     SKELETON, KPS_COLORS, LIMB_COLORS, RGB888P_SIZE, DISPLAY_SIZE
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.thermal import thermal_mode, cooled_interval
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -38,6 +39,8 @@ _bottom_bar = None
 _preview = None
 _body_kp = None
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整推理)
+_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
+_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_pose = ([], [])     # 上轮 (boxes, kpses) 缓存
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 
@@ -117,12 +120,21 @@ def on_frame(img):
     累积死机),非检测帧用缓存骨架画(稳定不闪)。
     """
     global _det_counter, _last_pose, _last_slots
+    global _thermal_mode, _thermal_counter
     if _RUNTIME is None or _body_kp is None:
         return
     boxes, kpses = _last_pose
     slots = []
+    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
+    _thermal_counter += 1
+    if _thermal_counter % 30 == 0:
+        _new_mode = thermal_mode(read_temperature())
+        if _new_mode != _thermal_mode:
+            if _new_mode:
+                print("[body_detect] thermal mode=%d" % _new_mode)
+            _thermal_mode = _new_mode
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
     if do_det:
         # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07)
         img_np = img.to_numpy_ref()
