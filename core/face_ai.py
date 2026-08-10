@@ -28,6 +28,21 @@ def ALIGN_UP(x, align=16):
     return (x + align - 1) // align * align
 
 
+def configure_ai2d_input(ai2d):
+    """配置 ai2d 输入格式并返回 input_is_packed 标志(同 object/gesture/body)。
+
+    单通道化(2026-08-10)根因修复:face 原来吃 chn2 RGBP888(planar),ai2d 写死
+    NCHW 输入;改吃 chn0 RGB888(packed)后格式不匹配 → 检测全错无识别。
+    优先 ai2d packed RGB888 枚举(RGB888p_FMT,K230 中 p=packed,与
+    Sensor.RGBP888 的 P=planar 命名相反),支持则 chn0 帧零拷贝直接喂;
+    否则 NCHW(planar 语义)须软件重排(2026-08-07 全屏假框根因)。
+    """
+    input_is_packed = hasattr(nn.ai2d_format, "RGB888p_FMT")
+    input_fmt = getattr(nn.ai2d_format, "RGB888p_FMT", nn.ai2d_format.NCHW_FMT)
+    ai2d.set_ai2d_dtype(input_fmt, nn.ai2d_format.NCHW_FMT, np.uint8, np.uint8)
+    return input_is_packed
+
+
 def _draw_color(hex_color):
     """hex 0xRRGGBB → K230 draw_line/draw_rectangle color tuple.
 
@@ -58,8 +73,7 @@ class FaceDetectionApp(AIBase):
         self.display_size = [ALIGN_UP(display_size[0], 16), display_size[1]]
         self.debug_mode = debug_mode
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
-                                 np.uint8, np.uint8)
+        self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, input_image_size=None):
         gc.collect()
@@ -144,8 +158,7 @@ class FaceRegistrationApp(AIBase):
             70.7299, 92.2041
         ]
         self.ai2d = Ai2d(debug_mode)
-        self.ai2d.set_ai2d_dtype(nn.ai2d_format.NCHW_FMT, nn.ai2d_format.NCHW_FMT,
-                                 np.uint8, np.uint8)
+        self.input_is_packed = configure_ai2d_input(self.ai2d)
 
     def config_preprocess(self, landm, input_image_size=None):
         gc.collect()
