@@ -16,6 +16,7 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.color_db import ColorDB
+from core.geometry import clamp_rect
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -625,15 +626,15 @@ def on_frame(img):
     if rect is not None:
         x, y, w, h = [int(v) for v in rect]
         color = _draw_color(BOX_UNKNOWN)
-        img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
-                           w * DET_SCALE, h * DET_SCALE,
-                           color=color, thickness=2)
+        bx, by, bw, bh = clamp_rect(x * DET_SCALE, y * DET_SCALE,
+                                    w * DET_SCALE, h * DET_SCALE,
+                                    img.width(), img.height())
+        img.draw_rectangle(bx, by, bw, bh, color=color, thickness=2)
         # 当前色未注册(与任一注册色阈值不完全相等) → 上报 id=0 + learned=0
         cur_registered = any(entry['threshold'] == cur_th
                              for _i, entry in _color_db.iter_slots())
         if not cur_registered:
-            slots.append((0, x * DET_SCALE, y * DET_SCALE,
-                          w * DET_SCALE, h * DET_SCALE, 100))
+            slots.append((0, bx, by, bw, bh, 100))
 
     # 注册色检测 -> 彩色 ID 框 + 填 slots
     for entry_idx, entry in _color_db.iter_slots():
@@ -642,13 +643,13 @@ def on_frame(img):
             x, y, w, h = [int(v) for v in r2]
             box_color = BOX_COLORS.get(entry_idx, BOX_UNKNOWN)
             color = _draw_color(box_color)
-            img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
-                               w * DET_SCALE, h * DET_SCALE,
-                               color=color, thickness=4)
-            img.draw_string_advanced(x * DET_SCALE, y * DET_SCALE - 24, 24,
+            bx, by, bw, bh = clamp_rect(x * DET_SCALE, y * DET_SCALE,
+                                        w * DET_SCALE, h * DET_SCALE,
+                                        img.width(), img.height())
+            img.draw_rectangle(bx, by, bw, bh, color=color, thickness=4)
+            img.draw_string_advanced(bx, by - 24, 24,
                                      "ID%d" % entry_idx, color=color)
-            slots.append((entry_idx, x * DET_SCALE, y * DET_SCALE,
-                          w * DET_SCALE, h * DET_SCALE, 100 | LEARNED_FLAG))  # 已学习:bit7=1
+            slots.append((entry_idx, bx, by, bw, bh, 100 | LEARNED_FLAG))  # 已学习:bit7=1
 
     # 居中绿色十字(对齐 tag_detect)
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)

@@ -17,6 +17,7 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core import tag_scan
 from core import tag_mode
+from core.geometry import clamp_rect
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -71,6 +72,7 @@ def on_frame(img):
 
     # 全白框 + 码值标签(codes 与 slots 同序:码值与框一一对应,防 ID 错位)
     for i, (_id_val, x, y, w, h, _conf) in enumerate(slots):
+        x, y, w, h = clamp_rect(x, y, w, h, img.width(), img.height())
         img.draw_rectangle(x, y, w, h, color=BOX_WHITE, thickness=2)
         img.draw_string_advanced(x, y - 24, 24, "ID:" + str(codes[i]),
                                  color=BOX_WHITE)

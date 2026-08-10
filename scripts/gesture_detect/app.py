@@ -18,6 +18,7 @@ from media.display import Display
 from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
+from core.geometry import clamp_rect
 from core.id_registry import IdRegistry
 from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
@@ -121,6 +122,9 @@ def _draw_hand_boxes(img, det_boxes, rec):
         y = int(y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
         w = int(x2 - x1) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
         h = int(y2 - y1) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+        # 收进可视区(手部框贴边/模型异常输出防越界 1px 驱动挂死)
+        x, y, w, h = clamp_rect(x, y, w, h,
+                                DISPLAY_SIZE[0], DISPLAY_SIZE[1])
         slot = rec.get(i)
         if slot:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))

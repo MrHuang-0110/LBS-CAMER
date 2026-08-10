@@ -21,6 +21,7 @@ DISPLAY_SIZE = [640, 480]
 
 # 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
+from core.geometry import clamp_rect
 
 
 def ALIGN_UP(x, align=16):
@@ -93,6 +94,8 @@ class FaceDetectionApp(AIBase):
                     y = y * self.display_size[1] // self.rgb888p_size[1]
                     w = w * self.display_size[0] // self.rgb888p_size[0]
                     h = h * self.display_size[1] // self.rgb888p_size[1]
+                    # 缩放后收进可视区(贴边人脸框防越界 1px 驱动挂死)
+                    x, y, w, h = clamp_rect(x, y, w, h, osd_img.width(), osd_img.height())
                     matched_id = rec_map.get(i)
                     color_hex = BOX_COLORS.get(matched_id, BOX_UNKNOWN) if matched_id else BOX_UNKNOWN
                     color = _draw_color(color_hex)

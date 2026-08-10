@@ -18,6 +18,7 @@ from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 from core.object_db import ObjectDB
+from core.geometry import clamp_rect
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -178,6 +179,8 @@ def on_frame(img):
         y = int(t) * DISPLAY_H // RGB888P_H
         w = int(r - l) * DISPLAY_W // RGB888P_W
         h = int(b - t) * DISPLAY_H // RGB888P_H
+        # 收进可视区(模型输出贴边/异常值防越界 1px 驱动挂死)
+        x, y, w, h = clamp_rect(x, y, w, h, DISPLAY_W, DISPLAY_H)
         conf = int(score * 100)
         if slot is not None:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))

@@ -15,6 +15,7 @@ from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_1
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.road_db import RoadDB
+from core.geometry import clamp_rect
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -631,9 +632,11 @@ def on_frame(img):
     rect = _find_largest_blob(img_det, cur_th)
     if rect is not None:
         x, y, w, h = [int(v) for v in rect]
-        # 画道路 bbox 绿框(ch0 VGA, ×2 缩放)
-        img.draw_rectangle(x * DET_SCALE, y * DET_SCALE,
-                           w * DET_SCALE, h * DET_SCALE,
+        # 画道路 bbox 绿框(ch0 VGA, ×2 缩放,贴边时收进可视区防越界挂死)
+        bx, by, bw, bh = clamp_rect(x * DET_SCALE, y * DET_SCALE,
+                                    w * DET_SCALE, h * DET_SCALE,
+                                    img.width(), img.height())
+        img.draw_rectangle(bx, by, bw, bh,
                            color=ROAD_GREEN, thickness=2)
         # 逐行质心:find_blobs 逐行 ROI(C 实现,避免逐像素 get_pixel+LAB 卡顿),
         # 限定在大 blob 的 x 范围内扫描,每行取最大 blob 的 cx,连绿色折线。
@@ -654,8 +657,7 @@ def on_frame(img):
                 cy2 = int(centroids[i + 1][1] * DET_SCALE)
                 img.draw_line(cx1, cy1, cx2, cy2, color=ROAD_GREEN, thickness=4)
         # 报槽 1
-        slots[0] = (1, x * DET_SCALE, y * DET_SCALE,
-                    w * DET_SCALE, h * DET_SCALE, 100)
+        slots[0] = (1, bx, by, bw, bh, 100)
 
     if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
