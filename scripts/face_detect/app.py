@@ -207,8 +207,23 @@ def on_frame(img):
         # 单通道(2026-08-10):AI 直接吃 chn0 显示帧(同 object/gesture/body),
         # 无 chn2 双路 ISP + 每检测帧 snapshot(隐藏热源,官方单路同构)
         img_np = img.to_numpy_ref()
+        # 单通道:packed RGB888 → planar CHW 逐通道重排(固件无 RGB888p_FMT 时
+        # input_is_packed=False,ai2d NCHW 语义须 planar;同 object/gesture/body
+        # 方案,2026-08-10 face 漏此致 det=0 无识别)
+        if not _face_det.input_is_packed:
+            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
+            _planar[0] = img_np[:, :, 0]
+            _planar[1] = img_np[:, :, 1]
+            _planar[2] = img_np[:, :, 2]
+            img_np = _planar
         det_boxes, landms = _face_det.run(img_np)
         _last_det = (det_boxes, landms)
+        # 临时诊断(2026-08-10 单通道化无识别排查):每 30 帧打印检测框数+格式探测
+        if _det_counter % 30 == 0:
+            _n_det = len(det_boxes) if det_boxes else 0
+            _sz = img.size() if hasattr(img, "size") else (0, 0)
+            print("[face_detect] det=%d packed=%s size=%s" % (
+                _n_det, _face_det.input_is_packed, str(_sz)))
         gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
         # 检测坐标(chn0 VGA 640x480)→ VGA 640x480 缩放因子(=1),识别/注册共用
         disp_w, disp_h = _face_det.display_size
@@ -293,8 +308,10 @@ def on_frame(img):
                               int(det[1] * disp_h // rgb_h),
                               int(det[2] * disp_w // rgb_w),
                               int(det[3] * disp_h // rgb_h), 100))
-        # 识别/注册全部完成:立即释放 numpy 视图引用,缩短其与显示 DMA
-        # (OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        # 识别/注册全部完成:立即释放 numpy 引用(视图或 planar 缓冲),
+        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+        if not _face_det.input_is_packed:
+            del _planar
         del img_np
     else:
         do_reg = False
