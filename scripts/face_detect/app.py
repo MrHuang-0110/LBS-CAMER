@@ -25,13 +25,15 @@ PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 # 检测降频:有脸/无脸均每 DET_IDLE_INTERVAL 帧检测一次(框滞后≤1帧),降 NPU+GC 负载提帧率
-DET_IDLE_INTERVAL = 2
+# 2026-08-10 死机排查: 2→3(det 每秒 10→6.7 次 @20fps,防 NPU 满载温度稳态 100°C)
+DET_IDLE_INTERVAL = 3
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
-# ID 更新延迟≤200ms,每帧 NPU+GC 工作量大幅下降
+# 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
+# ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
 REG_MAX_FACES = 4    # 多人性能保护:每帧最多识别脸数(与协议 4 槽对齐),超出只画框
-REG_INTERVAL_1 = 2   # 1 人:每 2 帧识别一轮
-REG_INTERVAL_2 = 4   # 2~3 人:每 4 帧识别一轮
-REG_INTERVAL_3 = 6   # ≥4 人:每 6 帧识别一轮
+REG_INTERVAL_1 = 4   # 1 人:每 4 帧识别一轮
+REG_INTERVAL_2 = 8   # 2~3 人:每 8 帧识别一轮
+REG_INTERVAL_3 = 12  # ≥4 人:每 12 帧识别一轮
 MIN_REG_AREA = 1600  # 注册最小脸面积(VGA px²,≈40×40);太小拒绝注册(特征质量差)
 TRACK_RADIUS = 80    # 非识别帧 ID 关联半径(chn2 1024x768 像素;人脸帧间位移 <80 正常)
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突

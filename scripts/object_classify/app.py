@@ -23,6 +23,7 @@ from core.id_registry import IdRegistry
 from core.object_classify_ai import ObjectClassifyRecognition, \
     OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
 from core.object_classify_db import object_classify_db, database_search
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -602,7 +603,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[object_classify] fc=%d" % fc)
                 if fc % 300 == 0:
-                    import gc as _gc; print("[object_classify] mem_free=%d" % _gc.mem_free())
+                    print(diag_line("[object_classify]", fc))
     finally:
         _deinit_ai()
         _destroy_ui()
