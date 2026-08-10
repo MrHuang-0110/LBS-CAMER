@@ -20,6 +20,7 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.body_ai import PersonKeyPointApp, PERSON_KP_KMPATH, \
     SKELETON, KPS_COLORS, LIMB_COLORS, RGB888P_SIZE, DISPLAY_SIZE
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -306,7 +307,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[body_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    print("[body_detect] mem_free=%d" % gc.mem_free())
+                    print(diag_line("[body_detect]", fc))
     finally:
         _deinit_ai()
         _destroy_ui()

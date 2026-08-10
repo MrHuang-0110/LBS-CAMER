@@ -19,6 +19,7 @@ from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.geometry import clamp_rect
+from core.diagnostics import diag_line
 from core.id_registry import IdRegistry
 from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
@@ -491,7 +492,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[gesture_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    import gc as _gc; print("[gesture_detect] mem_free=%d" % _gc.mem_free())
+                    print(diag_line("[gesture_detect]", fc))
     finally:
         _deinit_ai()
         _destroy_ui()

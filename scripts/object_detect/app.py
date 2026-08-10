@@ -19,6 +19,7 @@ from core.id_registry import IdRegistry
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 from core.object_db import ObjectDB
 from core.geometry import clamp_rect
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -478,7 +479,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[object_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    print("[object_detect] mem_free=%d" % gc.mem_free())
+                    print(diag_line("[object_detect]", fc))
     finally:
         _deinit_ai()
         _destroy_ui()

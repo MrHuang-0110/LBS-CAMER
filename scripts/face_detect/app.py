@@ -18,6 +18,7 @@ from core.font_manager import fonts
 from core.face_ai import FaceDetectionApp, FaceRegistrationApp, RGB888P_SIZE, DISPLAY_SIZE
 from core.face_db import face_db, database_search
 from core.id_registry import IdRegistry
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -557,7 +558,7 @@ def run(runtime):
             if fc % 30 == 0:
                 print("[face_detect] fc=%d" % fc)
                 if fc % 300 == 0:
-                    print("[face_detect] mem_free=%d" % gc.mem_free())
+                    print(diag_line("[face_detect]", fc))
     finally:
         _deinit_ai()
         _destroy_ui()
