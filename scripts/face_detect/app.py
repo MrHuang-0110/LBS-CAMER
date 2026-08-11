@@ -36,13 +36,13 @@ DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 
 # === 热源定位开关(2026-08-11 临时诊断:逐步关闭定位热源,定位后删除) ===
 # 用法:改 True/False 后部署,跑 10~15 分钟看 DIAG temp 趋势,关哪个明显降温即热源。
-# 当前档位(用户第 5 档):只开 AI 推理(UART/LVGL 关),验证 AI 是否额外增温。
-# ⚠️ 第 4 档结论:全关(仅摄像源)温度仍 100-101°C 浮动不死机 → 热源在最底层,
-#    嫌疑集中在 sleep 忙等/背光/ISP,非 AI/UART/LVGL/chn2。
+# 当前档位(验证收尾):全功能开启 + sleep 5ms。预期温度 95~97°C 稳定不死机。
+# 已验证:①sleep 30→5 降温 5~6°C(忙等实锤);②温度 95°C 时 fc 30 万帧不死机
+#   (NPU 100°C 保护假设成立——把温度压到 95 即安全)。
 DIAG_SKIP_AI = False     # False: 恢复 AI 推理(det/reg)
-DIAG_SKIP_UART = True    # True: 不 host_tick(不发送 UART)
-DIAG_SKIP_LVGL = True    # True: 不 lv.task_handler(LVGL 不刷新)
-DIAG_SLEEP_MS = 5        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
+DIAG_SKIP_UART = False   # False: 恢复 host_tick(UART 发送)
+DIAG_SKIP_LVGL = False   # False: 恢复 lv.task_handler(LVGL 刷新)
+DIAG_SLEEP_MS = 5        # 主循环 sleep 毫秒(忙等实锤后固定短 sleep,不用 LVGL 30ms 建议)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
