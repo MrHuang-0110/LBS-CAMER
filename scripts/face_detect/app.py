@@ -613,7 +613,10 @@ def run(runtime):
             _p3 = time.ticks_us()
             if _dbg:
                 print("[dbg] f%d post-show" % fc)
-            gc.collect()  # 放在 show_image 之后、task_handler 之前，避免 AI 推理后立即 GC 阻塞 DMA
+            # 主循环 gc 降频(2026-08-11 提速,保守档):每 2 帧一次(省 ~2.5ms/帧);
+            # on_frame 内 det/reg 后的 gc 保留(坑#16 NPU 缓冲回收)
+            if fc % 2 == 0:
+                gc.collect()
             _p4 = time.ticks_us()
             if _dbg:
                 print("[dbg] f%d post-gc" % fc)
