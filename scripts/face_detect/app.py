@@ -18,8 +18,7 @@ from core.font_manager import fonts
 from core.face_ai import FaceDetectionApp, FaceRegistrationApp, RGB888P_SIZE, DISPLAY_SIZE
 from core.face_db import face_db, database_search
 from core.id_registry import IdRegistry
-from core.diagnostics import diag_line, read_temperature
-from core.thermal import thermal_mode, cooled_interval
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -27,7 +26,8 @@ PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 # 检测降频自适应(2026-08-11):有脸每帧检测(官方同构,框零滞后);无脸 6 帧
 # 一次。⚠️ 拉满失败实测:无脸也每帧检测 → NPU 持续满载 6 倍 → 100°C 卡死
-# (NPU 100°C 保护)。热保护(cooled_interval)92/95°C 时再放大(×2/×4 取 30)。
+# (NPU 100°C 保护)。2026-08-12 去保护:不再按温度放大检测间隔(锁框迟钝
+# 根因是热模式把有脸检测也压到 30 帧),恢复纯自适应;温度由 DIAG 监控。
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
 DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降 NPU 负载防过热)
 
@@ -65,8 +65,6 @@ _reg_counter = 0     # 识别跳帧计数(每 reg_interval 帧识别一轮)
 _last_slots = None   # 上轮识别槽位(非识别帧复用,保持主机数据连续)
 _det_counter = 0     # 检测跳帧计数(每自适应间隔帧检测一次)
 _last_had_face = True  # 上轮检测是否有脸(自适应间隔:有脸高频/无脸低频)
-_thermal_mode = 0    # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
-_thermal_counter = 0  # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
 _last_track = []        # 识别帧目标缓存[(cx, cy, mid), ...]:非识别帧最近邻关联画 ID 框
@@ -189,23 +187,12 @@ def on_frame(img):
     if _RUNTIME is None or _face_det is None:
         return
     global _reg_counter, _last_slots, _det_counter, _last_det, _last_track, _last_had_face
-    global _thermal_mode, _thermal_counter
     det_boxes, landms = _last_det
     recognition_results = []
     slots = []  # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
-    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
-    _thermal_counter += 1
-    if _thermal_counter % 30 == 0:
-        _new_mode = thermal_mode(read_temperature())
-        if _new_mode != _thermal_mode:
-            if _new_mode:
-                print("[face_detect] thermal mode=%d" % _new_mode)
-            _thermal_mode = _new_mode
-    # 检测降频:自适应(无脸低频/有脸高频)再被温度模式放大(cooled_interval)
+    # 检测降频:纯自适应(无脸低频/有脸高频),不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % cooled_interval(
-        _det_interval(_last_had_face), _thermal_mode) == 0)
-    if do_det:
+    if _det_counter % _det_interval(_last_had_face) == 0:
         # 检测帧才取 AI 输入(chn2 XGA RGBP888 planar,官方同构):
         # 非检测帧跳过 det,减 chn2 取流与显示 DMA 竞争(2026-08-03 验证)
         # 过热修复(2026-08-11):单通道吃 chn0 RGB888 须每检测帧 921KB 软件
@@ -240,8 +227,7 @@ def on_frame(img):
                 reg_interval = REG_INTERVAL_3
             elif n_faces >= 2:
                 reg_interval = REG_INTERVAL_2
-            do_reg = (_reg_counter == 0 or k2_pending) and \
-                (_thermal_mode == 0 or k2_pending)  # 热模式:reg 仅 K2 强制才跑(降 NPU 负载)
+            do_reg = (_reg_counter == 0 or k2_pending)
             _reg_counter = (_reg_counter + 1) % reg_interval
             if det_boxes and landms and _face_reg is not None and do_reg:
                 # 识别帧:重建跟踪目标缓存 + 帧内 ID 去重(一个 ID 只标一个框)
