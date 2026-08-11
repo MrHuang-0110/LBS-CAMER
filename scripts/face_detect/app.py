@@ -36,8 +36,10 @@ DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 
 # === 热源定位开关(2026-08-11 临时诊断:逐步关闭定位热源,定位后删除) ===
 # 用法:改 True/False 后部署,跑 10~15 分钟看 DIAG temp 趋势,关哪个明显降温即热源。
-# 当前档位(用户第 4 档):全关,仅保留 chn2 通道静态 DMA(app_runtime 配置,不取流)。
-DIAG_SKIP_AI = True      # True: 跳过 det/reg 全部 AI 推理(仅显示链路)
+# 当前档位(用户第 5 档):只开 AI 推理(UART/LVGL 关),验证 AI 是否额外增温。
+# ⚠️ 第 4 档结论:全关(仅摄像源)温度仍 100-101°C 浮动不死机 → 热源在最底层,
+#    嫌疑集中在 sleep 忙等/背光/ISP,非 AI/UART/LVGL/chn2。
+DIAG_SKIP_AI = False     # False: 恢复 AI 推理(det/reg)
 DIAG_SKIP_UART = True    # True: 不 host_tick(不发送 UART)
 DIAG_SKIP_LVGL = True    # True: 不 lv.task_handler(LVGL 不刷新)
 DIAG_SLEEP_MS = 30        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
