@@ -19,8 +19,7 @@ from core.id_registry import IdRegistry
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 from core.object_db import ObjectDB
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line, read_temperature
-from core.thermal import thermal_mode, cooled_interval
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -33,6 +32,7 @@ from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 LEARNED_FLAG = 0x80
 # 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框
 # 2026-08-07 板端: 2→3(纯 Python postprocess 慢,降推理频率提平均帧率)
+# 2026-08-12 去保护:不再按温度放大间隔(对齐 face_detect),恢复固定 3 帧
 DET_INTERVAL = 3
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
@@ -70,8 +70,6 @@ _clear_btn = None
 _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
-_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
-_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_max = {}            # 上轮 per_class_max 缓存(非检测帧画框用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
@@ -123,20 +121,12 @@ def on_frame(img):
     if _RUNTIME is None or _object_det is None:
         return
     global _det_counter, _last_max, _last_slots, _last_names
-    global _thermal_mode, _thermal_counter
     per_class_max = _last_max
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, COCO 类别名)],仅已注册槽位
-    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
-    _thermal_counter += 1
-    if _thermal_counter % 30 == 0:
-        _new_mode = thermal_mode(read_temperature())
-        if _new_mode != _thermal_mode:
-            if _new_mode:
-                print("[object_detect] thermal mode=%d" % _new_mode)
-            _thermal_mode = _new_mode
+    # 检测降频:固定每 DET_INTERVAL 帧检测一次,不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
+    do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
         # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
@@ -486,7 +476,10 @@ def run(runtime):
                     _db.flush_to_disk(_OBJ_DB_PATH)  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            time.sleep_ms(lv.task_handler())
+            lv.task_handler()
+            # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
+            # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
+            time.sleep_ms(5)
             fc += 1
             if fc % 30 == 0:
                 print("[object_detect] fc=%d" % fc)
