@@ -14,9 +14,10 @@ from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 from libs.Utils import letterbox_pad_param
 
-# AI 通道分辨率(chn2 VGA 640x480,死机修复 2026-08-06:原 XGA 2.25MB/帧硬件 DMA
-# 持续搬运与显示 DMA 竞争累积致几分钟死机;det 输入 320x320 用 VGA 足够)
-RGB888P_SIZE = [640, 480]
+# AI 通道分辨率(chn2 XGA 1024x768,过热修复 2026-08-11 恢复官方 main2 同构:
+# K230 ISP chn2 不支持 VGA 小尺寸,配 VGA 致 snapshot(chn=2) 挂死;XGA 是
+# chn2 RGBP888 板端验证组合,det 320/reg 112 输入用 XGA 源充足)
+RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
 # 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
