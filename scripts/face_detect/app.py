@@ -33,6 +33,14 @@ BAR_BG = 0x1A1A1A
 # 业务功能不变(检测到脸后自动回到高频,人离开自动降频)
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
 DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
+
+# === 热源定位开关(2026-08-11 临时诊断:逐步关闭定位热源,定位后删除) ===
+# 用法:改 True/False 后部署,跑 10~15 分钟看 DIAG temp 趋势,关哪个明显降温即热源。
+# 默认全开 = 当前完整行为;逐项关闭组合见 项目记录.md 测试矩阵。
+DIAG_SKIP_AI = False      # True: 跳过 det/reg 全部 AI 推理(仅显示链路)
+DIAG_SKIP_UART = False    # True: 不 host_tick(不发送 UART)
+DIAG_SKIP_LVGL = False    # True: 不 lv.task_handler(LVGL 不刷新)
+DIAG_SLEEP_MS = 30        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
@@ -202,7 +210,7 @@ def on_frame(img):
     _det_counter += 1
     do_det = (_det_counter % cooled_interval(
         _det_interval(_last_had_face), _thermal_mode) == 0)
-    if do_det:
+    if do_det and not DIAG_SKIP_AI:
         # 检测帧才取 AI 输入(chn2 XGA RGBP888 planar,官方同构):
         # 非检测帧跳过 det,减 chn2 取流与显示 DMA 竞争(2026-08-03 验证)
         # 过热修复(2026-08-11):单通道吃 chn0 RGB888 须每检测帧 921KB 软件
@@ -333,7 +341,7 @@ def on_frame(img):
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     _face_det.draw_result(img, det_boxes, recognition_results)
-    if _RUNTIME is not None and _RUNTIME.host is not None:
+    if _RUNTIME is not None and _RUNTIME.host is not None and not DIAG_SKIP_UART:
         _RUNTIME.host_tick(slots)
 
 
@@ -621,11 +629,12 @@ def run(runtime):
             _p4 = time.ticks_us()
             if _dbg:
                 print("[dbg] f%d post-gc" % fc)
-            _lv_wait = lv.task_handler()
+            if not DIAG_SKIP_LVGL:
+                lv.task_handler()
             _p4b = time.ticks_us()
             if _dbg:
                 print("[dbg] f%d post-lvtask" % fc)
-            time.sleep_ms(_lv_wait)
+            time.sleep_ms(DIAG_SLEEP_MS)
             _p5 = time.ticks_us()
             fc += 1
             if fc % 30 == 0:
