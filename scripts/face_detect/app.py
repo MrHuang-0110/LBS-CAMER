@@ -36,10 +36,10 @@ DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 
 # === 热源定位开关(2026-08-11 临时诊断:逐步关闭定位热源,定位后删除) ===
 # 用法:改 True/False 后部署,跑 10~15 分钟看 DIAG temp 趋势,关哪个明显降温即热源。
-# 默认全开 = 当前完整行为;逐项关闭组合见 项目记录.md 测试矩阵。
-DIAG_SKIP_AI = False      # True: 跳过 det/reg 全部 AI 推理(仅显示链路)
-DIAG_SKIP_UART = False    # True: 不 host_tick(不发送 UART)
-DIAG_SKIP_LVGL = False    # True: 不 lv.task_handler(LVGL 不刷新)
+# 当前档位(用户第 4 档):全关,仅保留 chn2 通道静态 DMA(app_runtime 配置,不取流)。
+DIAG_SKIP_AI = True      # True: 跳过 det/reg 全部 AI 推理(仅显示链路)
+DIAG_SKIP_UART = True    # True: 不 host_tick(不发送 UART)
+DIAG_SKIP_LVGL = True    # True: 不 lv.task_handler(LVGL 不刷新)
 DIAG_SLEEP_MS = 30        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
