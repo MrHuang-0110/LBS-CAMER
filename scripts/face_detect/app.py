@@ -42,7 +42,7 @@ DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 DIAG_SKIP_AI = False     # False: 恢复 AI 推理(det/reg)
 DIAG_SKIP_UART = True    # True: 不 host_tick(不发送 UART)
 DIAG_SKIP_LVGL = True    # True: 不 lv.task_handler(LVGL 不刷新)
-DIAG_SLEEP_MS = 30        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
+DIAG_SLEEP_MS = 5        # 主循环 sleep 毫秒(0/5/15/30 对比 sleep 忙等 vs 让出)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
