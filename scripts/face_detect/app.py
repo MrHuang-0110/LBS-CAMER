@@ -34,15 +34,6 @@ BAR_BG = 0x1A1A1A
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
 DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
 
-# === 热源定位开关(2026-08-11 临时诊断:逐步关闭定位热源,定位后删除) ===
-# 用法:改 True/False 后部署,跑 10~15 分钟看 DIAG temp 趋势,关哪个明显降温即热源。
-# 当前档位(验证收尾):全功能开启 + sleep 5ms。预期温度 95~97°C 稳定不死机。
-# 已验证:①sleep 30→5 降温 5~6°C(忙等实锤);②温度 95°C 时 fc 30 万帧不死机
-#   (NPU 100°C 保护假设成立——把温度压到 95 即安全)。
-DIAG_SKIP_AI = False     # False: 恢复 AI 推理(det/reg)
-DIAG_SKIP_UART = False   # False: 恢复 host_tick(UART 发送)
-DIAG_SKIP_LVGL = False   # False: 恢复 lv.task_handler(LVGL 刷新)
-DIAG_SLEEP_MS = 5        # 主循环 sleep 毫秒(忙等实锤后固定短 sleep,不用 LVGL 30ms 建议)
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
@@ -212,7 +203,7 @@ def on_frame(img):
     _det_counter += 1
     do_det = (_det_counter % cooled_interval(
         _det_interval(_last_had_face), _thermal_mode) == 0)
-    if do_det and not DIAG_SKIP_AI:
+    if do_det:
         # 检测帧才取 AI 输入(chn2 XGA RGBP888 planar,官方同构):
         # 非检测帧跳过 det,减 chn2 取流与显示 DMA 竞争(2026-08-03 验证)
         # 过热修复(2026-08-11):单通道吃 chn0 RGB888 须每检测帧 921KB 软件
@@ -221,18 +212,12 @@ def on_frame(img):
         # ⚠️ 必须 to_numpy_ref() 喂 run(app_full_debug_backup/test_face_baseline
         # 历史验证路径);直接传 Image 对象致 nn.from_numpy 挂死(2026-08-11)
         img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
-        if _det_counter <= 4:
-            print("[dbg] det#%d post-snap2 %s" % (_det_counter, img_ai))
         if img_ai is None:
             # chn2 取帧失败兜底:跳过本帧检测(保留缓存结果,防异常杀循环)
             do_reg = False
         else:
             img_np = img_ai.to_numpy_ref()
-            if _det_counter <= 4:
-                print("[dbg] det#%d pre-detrun" % _det_counter)
             det_boxes, landms = _face_det.run(img_np)
-            if _det_counter <= 4:
-                print("[dbg] det#%d post-detrun det=%d" % (_det_counter, len(det_boxes) if det_boxes else 0))
             _last_det = (det_boxes, landms)
             # 临时诊断(过热修复后):每 30 帧打印检测框数+AI 帧尺寸
             if _det_counter % 30 == 0:
@@ -343,7 +328,7 @@ def on_frame(img):
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     _face_det.draw_result(img, det_boxes, recognition_results)
-    if _RUNTIME is not None and _RUNTIME.host is not None and not DIAG_SKIP_UART:
+    if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
 
 
@@ -594,12 +579,7 @@ def run(runtime):
     try:
         while not exit_flag[0]:
             os.exitpoint()
-            _dbg = fc < 8
-            if _dbg:
-                print("[dbg] f%d pre-snap0" % fc)
             img = runtime.sensor.snapshot(chn=CAM_CHN_ID_0)
-            if _dbg:
-                print("[dbg] f%d post-snap0 %s" % (fc, img))
             _p1 = time.ticks_us()
             try:
                 on_frame(img)
@@ -610,33 +590,25 @@ def run(runtime):
                 except Exception:
                     pass
             _p2 = time.ticks_us()
-            if _dbg:
-                print("[dbg] f%d post-onframe" % fc)
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
             if _pending_clear_flush:
                 _pending_clear_flush = False
                 face_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口,防断电/异常退出后旧数据回魂)
-            if _dbg:
-                print("[dbg] f%d post-pollk2" % fc)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             _p3 = time.ticks_us()
-            if _dbg:
-                print("[dbg] f%d post-show" % fc)
-            # 主循环 gc 降频(2026-08-11 提速,保守档):每 2 帧一次(省 ~2.5ms/帧);
+            # 主循环 gc 降频(2026-08-11):每 2 帧一次(省 ~2.5ms/帧);
             # on_frame 内 det/reg 后的 gc 保留(坑#16 NPU 缓冲回收)
             if fc % 2 == 0:
                 gc.collect()
             _p4 = time.ticks_us()
-            if _dbg:
-                print("[dbg] f%d post-gc" % fc)
-            if not DIAG_SKIP_LVGL:
-                lv.task_handler()
+            lv.task_handler()
             _p4b = time.ticks_us()
-            if _dbg:
-                print("[dbg] f%d post-lvtask" % fc)
-            time.sleep_ms(DIAG_SLEEP_MS)
+            # 睡眠固定 5ms(2026-08-11 热源定位结论):K230 time.sleep_ms 忙等,
+            # LVGL 建议的 30ms 是空转热源(sleep 30→5 降温 5~6°C)且拖累帧率;
+            # 官方 main2 无 LVGL 无 sleep 故 90°C。短 sleep + 热保护下温度 95°C 档
+            time.sleep_ms(5)
             _p5 = time.ticks_us()
             fc += 1
             if fc % 30 == 0:
