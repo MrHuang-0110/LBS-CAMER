@@ -264,10 +264,11 @@ class AppRuntime:
         """按 category 决定 sensor 通道配置。"""
         chs = [(CAM_CHN_ID_0, Sensor.VGA, Sensor.RGB888)]
         if category_id == "face_detect":
-            # 单通道(死机排查 2026-08-10):仅 chn0 VGA RGB888 显示+AI 推理,
-            # 无 chn2 双路 ISP(隐藏热源)+每检测帧 snapshot(同 object/gesture/
-            # body 方案)。face_det 320/reg 112 输入 VGA 源够用。
-            pass
+            # 过热修复(2026-08-11):恢复 chn2 VGA RGBP888 作 AI 输入(官方
+            # main2 同构)。单通道吃 chn0 RGB888 须每检测帧 921KB 软件重排
+            # (on=108ms CPU 满载→100.7°C 死机);chn2 RGBP888 planar 直出零
+            # 重排,VGA 0.9MB/帧 DMA 远小于历史 XGA 2.25MB(死机根因)。
+            chs.append((CAM_CHN_ID_2, Sensor.VGA, Sensor.RGBP888))
         elif category_id == "camera":
             chs.append((CAM_CHN_ID_1, Sensor.SXGAM, Sensor.RGB565))
         elif category_id == "tag_detect":

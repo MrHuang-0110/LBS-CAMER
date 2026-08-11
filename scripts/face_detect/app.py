@@ -12,7 +12,7 @@ import time
 import lvgl as lv
 import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0
+from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.face_ai import FaceDetectionApp, FaceRegistrationApp, RGB888P_SIZE, DISPLAY_SIZE
@@ -202,34 +202,29 @@ def on_frame(img):
     do_det = (_det_counter % cooled_interval(
         _det_interval(_last_had_face), _thermal_mode) == 0)
     if do_det:
-        # 检测帧才取 AI 输入(chn0 显示帧的 numpy 视图):非检测帧跳过 det,
-        # 减 NPU 推理与显示 DMA 竞争
-        # 单通道(2026-08-10):AI 直接吃 chn0 显示帧(同 object/gesture/body),
-        # 无 chn2 双路 ISP + 每检测帧 snapshot(隐藏热源,官方单路同构)
-        img_np = img.to_numpy_ref()
-        # 单通道:packed RGB888 → planar CHW 逐通道重排(固件无 RGB888p_FMT 时
-        # input_is_packed=False,ai2d NCHW 语义须 planar;同 object/gesture/body
-        # 方案,2026-08-10 face 漏此致 det=0 无识别)
-        if not _face_det.input_is_packed:
-            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-            _planar[0] = img_np[:, :, 0]
-            _planar[1] = img_np[:, :, 1]
-            _planar[2] = img_np[:, :, 2]
-            img_np = _planar
-        det_boxes, landms = _face_det.run(img_np)
-        _last_det = (det_boxes, landms)
-        # 临时诊断(2026-08-10 单通道化无识别排查):每 30 帧打印检测框数+格式探测
-        if _det_counter % 30 == 0:
-            _n_det = len(det_boxes) if det_boxes else 0
-            _sz = img.size() if hasattr(img, "size") else (0, 0)
-            print("[face_detect] det=%d packed=%s size=%s" % (
-                _n_det, _face_det.input_is_packed, str(_sz)))
-        gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
+        # 检测帧才取 AI 输入(chn2 VGA RGBP888 planar,官方 main2 同构):
+        # 非检测帧跳过 det,减 chn2 取流与显示 DMA 竞争(2026-08-03 验证)
+        # 过热修复(2026-08-11):单通道吃 chn0 RGB888 须每检测帧 921KB 软件
+        # planar 重排(on=108ms CPU 满载→100.7°C 死机);chn2 RGBP888 硬件
+        # 直出 planar,Image 直接喂 AI2D(NCHW)零重排
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        if img_ai is None:
+            # chn2 取帧失败兜底:跳过本帧检测(保留缓存结果,防异常杀循环)
+            do_reg = False
+        else:
+            det_boxes, landms = _face_det.run(img_ai)
+            _last_det = (det_boxes, landms)
+            # 临时诊断(过热修复后):每 30 帧打印检测框数+AI 帧尺寸
+            if _det_counter % 30 == 0:
+                _n_det = len(det_boxes) if det_boxes else 0
+                _sz = img_ai.size() if hasattr(img_ai, "size") else (0, 0)
+                print("[face_detect] det=%d size=%s" % (_n_det, str(_sz)))
+            gc.collect()  # det 后立即回收 NPU 原生缓冲(坑#16:运动多人时防帧内峰值累积)
         # 检测坐标(chn0 VGA 640x480)→ VGA 640x480 缩放因子(=1),识别/注册共用
         disp_w, disp_h = _face_det.display_size
         rgb_w, rgb_h = _face_det.rgb888p_size
-        # 识别判定仅在检测帧(有新鲜 det 结果与 img_np):按人数降频,K2 注册强制。
-        # ⚠️ 不可放检测块外:do_reg 若落在非检测帧,img_np 未定义 → NameError
+        # 识别判定仅在检测帧(有新鲜 det 结果与 img_ai):按人数降频,K2 注册强制。
+        # ⚠️ 不可放检测块外:do_reg 若落在非检测帧,img_ai 未定义 → NameError
         n_faces = len(det_boxes) if det_boxes else 0
         _last_had_face = n_faces > 0  # 更新自适应间隔状态(无脸→下次低频)
         k2_pending = _id_registry is not None and _id_registry.has_pending()
@@ -249,7 +244,7 @@ def on_frame(img):
             for i in range(min(len(det_boxes), REG_MAX_FACES)):
                 try:
                     _face_reg.config_preprocess(landms[i])
-                    feature = _face_reg.run(img_np)
+                    feature = _face_reg.run(img_ai)
                     gc.collect()  # 每张脸推理后立即回收(坑#16:多人/运动时防帧内原生缓冲峰值叠加致 kpu.run 永久阻塞)
                     mid, score = database_search(feature, _db_features)
                     if mid is None or mid in used_mid:
@@ -283,7 +278,7 @@ def on_frame(img):
                 else:
                     try:
                         _face_reg.config_preprocess(landms[max_i])
-                        feature = _face_reg.run(img_np)
+                        feature = _face_reg.run(img_ai)
                         gc.collect()  # 注册推理后立即回收(坑#16,与识别循环同策略)
                         slot = _id_registry.try_register(feature, _RUNTIME.buzzer)
                         if slot is not None:
@@ -308,11 +303,9 @@ def on_frame(img):
                               int(det[1] * disp_h // rgb_h),
                               int(det[2] * disp_w // rgb_w),
                               int(det[3] * disp_h // rgb_h), 100))
-        # 识别/注册全部完成:立即释放 numpy 引用(视图或 planar 缓冲),
-        # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
-        if not _face_det.input_is_packed:
-            del _planar
-        del img_np
+            # 识别/注册全部完成:立即释放 chn2 帧引用,
+            # 缩短其与显示 DMA(OSD1 show_image + OSD2 LVGL FULL flush)的共存期
+            del img_ai
     else:
         do_reg = False
     # 非识别帧:按中心最近邻把缓存 ID 关联到新框(防旧结果贴错新框窜脸;
