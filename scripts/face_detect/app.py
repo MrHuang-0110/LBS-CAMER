@@ -31,6 +31,11 @@ BAR_BG = 0x1A1A1A
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
 DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降 NPU 负载防过热)
 
+# 热源定位二轮诊断开关(2026-08-12):默认 False=当前行为不变。
+# 板端逐档关闭对照(LVGL/UART)定位温度差来源,定位后删除(同首轮流程)。
+DIAG_SKIP_LVGL = False  # True:主循环不调 lv.task_handler(LVGL 不刷新)
+DIAG_SKIP_UART = False  # True:on_frame 末尾不调 host_tick(UART 不发送)
+
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
 # ID 更新延迟≤600ms(4 人),脸数上限与识别能力不变(保持业务功能)
@@ -328,7 +333,7 @@ def on_frame(img):
     # 串口每帧发送(2026-08-11 用户回退:降频非问题所在,历史版本每帧串口
     # 无此拖累;on+18ms 真因待定,嫌疑转向 LVGL OSD2 flush DMA 竞争,下一步
     # 用 SKIP_LVGL 对比验证)
-    if _RUNTIME is not None and _RUNTIME.host is not None:
+    if _RUNTIME is not None and _RUNTIME.host is not None and not DIAG_SKIP_UART:
         _RUNTIME.host_tick(slots)
 
 
@@ -576,6 +581,10 @@ def run(runtime):
     _build_ui(runtime, exit_flag)
     fc = 0
     _perf_t = time.ticks_us()  # 每帧分段耗时插桩(诊断用,2026-08-10)
+    _win_on_sum = 0
+    _win_on_min = 1 << 30
+    _win_on_max = 0
+    _win_tot_sum = 0
     try:
         while not exit_flag[0]:
             os.exitpoint()
@@ -603,7 +612,8 @@ def run(runtime):
             if fc % 2 == 0:
                 gc.collect()
             _p4 = time.ticks_us()
-            lv.task_handler()
+            if not DIAG_SKIP_LVGL:
+                lv.task_handler()
             _p4b = time.ticks_us()
             # 睡眠 5ms(2026-08-11 热源定位结论):K230 time.sleep_ms 忙等,
             # LVGL 建议的 30ms 是空转热源(sleep 30→5 降温 5~6°C);sleep 0 +
@@ -611,11 +621,24 @@ def run(runtime):
             time.sleep_ms(5)
             _p5 = time.ticks_us()
             fc += 1
+            # 30 帧窗口统计:on_min=普通帧、on_max=检测帧,补单帧打印盲区
+            _on_us = _p2 - _p1
+            _win_on_sum += _on_us
+            _win_tot_sum += _p5 - _perf_t
+            if _on_us < _win_on_min:
+                _win_on_min = _on_us
+            if _on_us > _win_on_max:
+                _win_on_max = _on_us
             if fc % 30 == 0:
-                print("[perf] snap=%d on=%d show=%d gc=%d lvtask=%d sleep=%d total=%d" % (
-                    _p1 - _perf_t, _p2 - _p1, _p3 - _p2,
-                    _p4 - _p3, _p4b - _p4, _p5 - _p4b, _p5 - _perf_t))
+                print("[perf] win30 on_avg=%d on_min=%d on_max=%d total_avg=%d "
+                      "lvtask=%d sleep=%d show=%d" % (
+                          _win_on_sum // 30, _win_on_min, _win_on_max,
+                          _win_tot_sum // 30, _p4b - _p4, _p5 - _p4b, _p3 - _p2))
                 print("[face_detect] fc=%d" % fc)
+                _win_on_sum = 0
+                _win_on_min = 1 << 30
+                _win_on_max = 0
+                _win_tot_sum = 0
                 if fc % 300 == 0:
                     print(diag_line("[face_detect]", fc))
             _perf_t = time.ticks_us()
