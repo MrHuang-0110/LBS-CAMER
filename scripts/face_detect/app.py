@@ -25,11 +25,11 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
-# 检测降频自适应(2026-08-11 拉满):有脸/无脸均每帧检测(官方 demo 同构,
-# 框零滞后)。热保护(thermal.cooled_interval)在 92/95°C 时自动放大间隔
-# (mode1:×2, mode2:×4 取 30),高温兜底仍有效,正常温度下 FPS 拉满。
+# 检测降频自适应(2026-08-11):有脸每帧检测(官方同构,框零滞后);无脸 6 帧
+# 一次。⚠️ 拉满失败实测:无脸也每帧检测 → NPU 持续满载 6 倍 → 100°C 卡死
+# (NPU 100°C 保护)。热保护(cooled_interval)92/95°C 时再放大(×2/×4 取 30)。
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
-DET_INTERVAL_IDLE = 1    # 无脸:每帧检测一次(FPS 拉满;高温由热保护降频)
+DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降 NPU 负载防过热)
 
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
@@ -602,10 +602,10 @@ def run(runtime):
             _p4 = time.ticks_us()
             lv.task_handler()
             _p4b = time.ticks_us()
-            # 睡眠 0ms(2026-08-11 热源定位结论 + FPS 拉满):K230 time.sleep_ms
-            # 忙等,任何 sleep 都是空转热源;sleep 0 归零空转(帧率受 sensor
-            # 30fps 上限约束,snapshot 阻塞取帧已节流)。热保护兜底高温。
-            time.sleep_ms(0)
+            # 睡眠 5ms(2026-08-11 热源定位结论):K230 time.sleep_ms 忙等,
+            # LVGL 建议的 30ms 是空转热源(sleep 30→5 降温 5~6°C);sleep 0 +
+            # 每帧检测组合实测 100°C 卡死,回退已验证的 5ms。
+            time.sleep_ms(5)
             _p5 = time.ticks_us()
             fc += 1
             if fc % 30 == 0:
