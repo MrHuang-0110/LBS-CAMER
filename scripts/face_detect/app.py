@@ -25,14 +25,11 @@ BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
-# 检测降频自适应(2026-08-10 死机排查):无脸低频/有脸高频
-# - 静止无脸场景(实测主场景)只跑 det 单模型,温度随运行累积到 100°C 死机;
-#   DET_INTERVAL_IDLE=6 → det 每秒 10→3.3 次(@20fps),负载降 2/3,防过热
-# - 有脸场景 DET_INTERVAL_ACTIVE=1 每帧检测(官方 demo 同构,框零滞后;
-#   2026-08-11 用户反馈绘框跟随慢,2→1;NPU 负载仅人脸在场时翻倍)
-# 业务功能不变(检测到脸后自动回到高频,人离开自动降频)
+# 检测降频自适应(2026-08-11 拉满):有脸/无脸均每帧检测(官方 demo 同构,
+# 框零滞后)。热保护(thermal.cooled_interval)在 92/95°C 时自动放大间隔
+# (mode1:×2, mode2:×4 取 30),高温兜底仍有效,正常温度下 FPS 拉满。
 DET_INTERVAL_ACTIVE = 1  # 检测到脸:每帧检测一次(实时,官方同构)
-DET_INTERVAL_IDLE = 6    # 无脸:每 6 帧检测一次(降负载防过热)
+DET_INTERVAL_IDLE = 1    # 无脸:每帧检测一次(FPS 拉满;高温由热保护降频)
 
 # 识别降频(帧率优先):按人数分级间隔识别一轮;非识别帧复用上轮槽位,
 # 2026-08-10 死机排查: 识别间隔 2/4/6 → 4/8/12(识别频率减半,负载大头),
@@ -605,10 +602,10 @@ def run(runtime):
             _p4 = time.ticks_us()
             lv.task_handler()
             _p4b = time.ticks_us()
-            # 睡眠固定 5ms(2026-08-11 热源定位结论):K230 time.sleep_ms 忙等,
-            # LVGL 建议的 30ms 是空转热源(sleep 30→5 降温 5~6°C)且拖累帧率;
-            # 官方 main2 无 LVGL 无 sleep 故 90°C。短 sleep + 热保护下温度 95°C 档
-            time.sleep_ms(5)
+            # 睡眠 0ms(2026-08-11 热源定位结论 + FPS 拉满):K230 time.sleep_ms
+            # 忙等,任何 sleep 都是空转热源;sleep 0 归零空转(帧率受 sensor
+            # 30fps 上限约束,snapshot 阻塞取帧已节流)。热保护兜底高温。
+            time.sleep_ms(0)
             _p5 = time.ticks_us()
             fc += 1
             if fc % 30 == 0:
