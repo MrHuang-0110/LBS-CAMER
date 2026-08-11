@@ -62,7 +62,6 @@ _det_counter = 0     # 检测跳帧计数(每自适应间隔帧检测一次)
 _last_had_face = True  # 上轮检测是否有脸(自适应间隔:有脸高频/无脸低频)
 _thermal_mode = 0    # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
 _thermal_counter = 0  # 温度读取计数(每 30 帧读一次 machine.temperature)
-_tick_counter = 0    # UART tick 发送计数(每 2 帧发一次,降 K230 UART.write 固定开销)
 _last_det = ([], []) # 上轮检测结果缓存(det_boxes, landms)
 _pending_clear_flush = False  # 清除请求:主循环安全窗口立即写空库(防断电重启旧数据回魂)
 _last_track = []        # 识别帧目标缓存[(cx, cy, mid), ...]:非识别帧最近邻关联画 ID 框
@@ -185,7 +184,7 @@ def on_frame(img):
     if _RUNTIME is None or _face_det is None:
         return
     global _reg_counter, _last_slots, _det_counter, _last_det, _last_track, _last_had_face
-    global _thermal_mode, _thermal_counter, _tick_counter
+    global _thermal_mode, _thermal_counter
     det_boxes, landms = _last_det
     recognition_results = []
     slots = []  # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
@@ -326,11 +325,10 @@ def on_frame(img):
     img.draw_cross(320, 240, color=(0xFF, 0x00, 0xFF, 0x00), size=20, thickness=2)
 
     _face_det.draw_result(img, det_boxes, recognition_results)
-    # UART 发送降频(2026-08-11 性能修复):每帧 host_tick 拖慢 on ~18ms(K230
-    # UART.write 固定开销,on 17→35ms 帧率 29→21fps);每 2 帧发一次,握手轮询
-    # 随之 2 帧一次(主机超时检测秒级,延迟 1 帧可接受),数据帧率 ~10-15fps 足够
-    _tick_counter += 1
-    if _RUNTIME is not None and _RUNTIME.host is not None and _tick_counter % 2 == 0:
+    # 串口每帧发送(2026-08-11 用户回退:降频非问题所在,历史版本每帧串口
+    # 无此拖累;on+18ms 真因待定,嫌疑转向 LVGL OSD2 flush DMA 竞争,下一步
+    # 用 SKIP_LVGL 对比验证)
+    if _RUNTIME is not None and _RUNTIME.host is not None:
         _RUNTIME.host_tick(slots)
 
 
