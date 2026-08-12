@@ -10,9 +10,8 @@ import os
 import sys
 import time
 import lvgl as lv
-import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0
+from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
@@ -38,9 +37,11 @@ DET_INTERVAL_IDLE = 6    # 无目标:每 6 帧检测一次(降 NPU 负载防过�
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
-# 单通道:推理帧 = 显示帧 = chn0 VGA 640x480(与 AI 通道分辨率 RGB888P_SIZE 一致)
-RGB888P_W = 640
-RGB888P_H = 480
+# AI 输入 = chn2 XGA 1024x768 RGBP888 硬件直出 planar(2026-08-12 对齐
+# face_detect):单通道 chn0 packed 须 921KB 软件重排(on_max=136ms 卡顿);
+# chn2 零重排。⚠️ ISP chn2 不支持 VGA,配 XGA(坑#20)。显示仍为 chn0 VGA。
+RGB888P_W = 1024
+RGB888P_H = 768
 DISPLAY_W = 640
 DISPLAY_H = 480
 
@@ -135,53 +136,48 @@ def on_frame(img):
     _det_counter += 1
     do_det = (_det_counter % _det_interval(_last_had_objects) == 0)
     if do_det:
-        # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
-        # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
-        # img 持有至 show_image。
-        img_np = img.to_numpy_ref()
-        # packed RGB888 -> planar CHW: ai2d 若支持 packed 输入枚举(RGB888p_FMT)
-        # 则零拷贝直接喂,否则 NCHW(planar 语义)须逐通道重排(2026-08-07 全屏
-        # 假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
-        if not _object_det.input_is_packed:
-            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-            _planar[0] = img_np[:, :, 0]
-            _planar[1] = img_np[:, :, 1]
-            _planar[2] = img_np[:, :, 2]
-            img_np = _planar
-        try:
-            dets = _object_det.run(img_np)
-        except Exception as e:
-            print("[object_detect] run error: %s" % e)
-            dets = []
-        # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
-        if not _object_det.input_is_packed:
-            del _planar
-        del img_np
-        gc.collect()
-        # 每类别取面积最大实例
-        per_class_max = {}   # class_id -> [l,t,r,b,score,cid]
-        for det in dets:
+        # chn2 XGA RGBP888 硬件直出 planar(2026-08-12 对齐 face_detect):
+        # 单通道 chn0 packed 须 921KB 软件重排(on_max=136ms 卡顿);chn2 零
+        # 重排。⚠️ 必须 to_numpy_ref() 喂 run(Image 直喂致 nn.from_numpy 挂死)
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        if img_ai is None:
+            # chn2 取帧失败兜底:跳过本帧检测(保留缓存结果,防异常杀循环)
+            do_det = False
+        else:
+            img_np = img_ai.to_numpy_ref()
             try:
-                l, t, r, b, score, cid = [float(v) for v in det]
-            except Exception:
-                continue
-            cid = int(cid)
-            rect = [l, t, r, b, score, cid]
-            cur = per_class_max.get(cid)
-            if cur is None or _rect_area(rect) > _rect_area(cur):
-                per_class_max[cid] = rect
-        _last_max = per_class_max
-        _last_had_objects = bool(per_class_max)  # 更新自适应间隔状态(无目标→下次低频)
-        # KEY2 注册:当前帧最大框的类别(检测帧才有新鲜 dets)
-        if _id_registry is not None and _id_registry.has_pending() and per_class_max:
-            max_cid = max(per_class_max.values(), key=_rect_area)[5]
-            try:
-                slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
-                                                 registrar=_db.register)
-                if slot is not None:
-                    _db.flush_to_disk(_OBJ_DB_PATH)  # 注册即写(task_handler 前安全窗口)
+                dets = _object_det.run(img_np)
             except Exception as e:
-                print("[object_detect] register error: %s" % e)
+                print("[object_detect] run error: %s" % e)
+                dets = []
+            # 推理完成立即释放 chn2 帧引用(缩短与显示 DMA 共存期,坑#16)
+            del img_np
+            del img_ai
+            gc.collect()
+            # 每类别取面积最大实例
+            per_class_max = {}   # class_id -> [l,t,r,b,score,cid]
+            for det in dets:
+                try:
+                    l, t, r, b, score, cid = [float(v) for v in det]
+                except Exception:
+                    continue
+                cid = int(cid)
+                rect = [l, t, r, b, score, cid]
+                cur = per_class_max.get(cid)
+                if cur is None or _rect_area(rect) > _rect_area(cur):
+                    per_class_max[cid] = rect
+            _last_max = per_class_max
+            _last_had_objects = bool(per_class_max)  # 更新自适应间隔状态(无目标→下次低频)
+            # KEY2 注册:当前帧最大框的类别(检测帧才有新鲜 dets)
+            if _id_registry is not None and _id_registry.has_pending() and per_class_max:
+                max_cid = max(per_class_max.values(), key=_rect_area)[5]
+                try:
+                    slot = _id_registry.try_register(max_cid, _RUNTIME.buzzer,
+                                                     registrar=_db.register)
+                    if slot is not None:
+                        _db.flush_to_disk(_OBJ_DB_PATH)  # 注册即写(task_handler 前安全窗口)
+                except Exception as e:
+                    print("[object_detect] register error: %s" % e)
     # 画框:每帧(检测帧新框/非检测帧缓存框;类别精确匹配每帧重算,无窜脸)
     for cid, det in per_class_max.items():
         l, t, r, b, score, _ = det

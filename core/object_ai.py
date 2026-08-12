@@ -21,7 +21,10 @@ from libs.PipeLine import ScopedTiming
 # 推理帧分辨率(单通道 2026-08-07:AI 直接吃 chn0 显示帧 VGA 640x480,无独立
 # 推理通道;历史 chn2 XGA 2.25MB/帧硬件 DMA 与显示 DMA 竞争累积致几分钟死机,
 # 已随 object_detect 单通道化根治;det 输入 320x320 用 VGA 足够)
-RGB888P_SIZE = [640, 480]
+# AI 通道分辨率:chn2 XGA 1024x768(2026-08-12 对齐 face_detect 硬件直出)。
+# 单通道 chn0 packed 须 921KB 软件重排(on_max=136ms 卡顿);chn2 RGBP888
+# planar 直出零重排。⚠️ ISP chn2 不支持 VGA 小尺寸,配 XGA(坑#20)。
+RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
 # COCO 80 类英文标签(从 demo 实验15 拷贝)
