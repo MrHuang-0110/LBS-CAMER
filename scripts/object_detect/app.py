@@ -30,10 +30,10 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-# 检测降频自适应(2026-08-12 对齐 face_detect):有目标每帧检测(框零滞后);
-# 无目标 6 帧一次(降 NPU 负载防过热)。原固定 3 帧是 2026-08-07 纯 Python
-# postprocess 慢的权衡,升级自适应后有目标跟手、无目标更省电。
-DET_INTERVAL_ACTIVE = 1  # 检测到目标:每帧检测一次(实时,官方同构)
+# 检测降频自适应(2026-08-12 对齐 face_detect):有目标高频/无目标低频。
+# ACTIVE 原 1(每帧)用户实测卡——object 是纯 Python NMS + packed 软件重排,
+# 每帧开销大,调 2 摊薄(约 30ms 一框仍跟手);无目标 6 帧降 NPU 负载。
+DET_INTERVAL_ACTIVE = 2  # 检测到目标:每 2 帧检测一次(摊薄 postprocess 开销)
 DET_INTERVAL_IDLE = 6    # 无目标:每 6 帧检测一次(降 NPU 负载防过热)
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
