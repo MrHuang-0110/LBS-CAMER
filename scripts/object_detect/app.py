@@ -463,10 +463,16 @@ def run(runtime):
     _init_registry(runtime.fpioa)
     _build_ui(runtime, exit_flag)
     fc = 0
+    _perf_t = time.ticks_us()  # 每帧分段耗时插桩(诊断用,2026-08-12 对齐 face)
+    _win_on_sum = 0
+    _win_on_min = 1 << 30
+    _win_on_max = 0
+    _win_tot_sum = 0
     try:
         while not exit_flag[0]:
             os.exitpoint()
             img = runtime.sensor.snapshot(chn=CAM_CHN_ID_0)
+            _p1 = time.ticks_us()
             try:
                 on_frame(img)
             except Exception as e:
@@ -475,6 +481,7 @@ def run(runtime):
                     sys.print_exception(e)
                 except Exception:
                     pass
+            _p2 = time.ticks_us()
             if _id_registry is not None:
                 _id_registry.poll_k2()
             _process_overlay_close()
@@ -483,16 +490,37 @@ def run(runtime):
                 if _db is not None:
                     _db.flush_to_disk(_OBJ_DB_PATH)  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
+            _p3 = time.ticks_us()
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
+            _p4 = time.ticks_us()
             lv.task_handler()
+            _p4b = time.ticks_us()
             # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
             # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
             time.sleep_ms(5)
+            _p5 = time.ticks_us()
             fc += 1
+            # 30 帧窗口统计:on_min=普通帧、on_max=检测帧,对齐 face debug 输出
+            _on_us = _p2 - _p1
+            _win_on_sum += _on_us
+            _win_tot_sum += _p5 - _perf_t
+            if _on_us < _win_on_min:
+                _win_on_min = _on_us
+            if _on_us > _win_on_max:
+                _win_on_max = _on_us
             if fc % 30 == 0:
+                print("[perf] win30 on_avg=%d on_min=%d on_max=%d total_avg=%d "
+                      "lvtask=%d sleep=%d show=%d" % (
+                          _win_on_sum // 30, _win_on_min, _win_on_max,
+                          _win_tot_sum // 30, _p4b - _p4, _p5 - _p4b, _p3 - _p2))
                 print("[object_detect] fc=%d" % fc)
+                _win_on_sum = 0
+                _win_on_min = 1 << 30
+                _win_on_max = 0
+                _win_tot_sum = 0
                 if fc % 300 == 0:
                     print(diag_line("[object_detect]", fc))
+            _perf_t = time.ticks_us()
     finally:
         _deinit_ai()
         _destroy_ui()
