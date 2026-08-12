@@ -13,15 +13,13 @@ import os
 import sys
 import time
 import lvgl as lv
-import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0
+from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.body_ai import PersonKeyPointApp, PERSON_KP_KMPATH, \
     SKELETON, KPS_COLORS, LIMB_COLORS, RGB888P_SIZE, DISPLAY_SIZE
-from core.diagnostics import diag_line, read_temperature
-from core.thermal import thermal_mode, cooled_interval
+from core.diagnostics import diag_line
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -39,8 +37,6 @@ _bottom_bar = None
 _preview = None
 _body_kp = None
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整推理)
-_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
-_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_pose = ([], [])     # 上轮 (boxes, kpses) 缓存
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 
@@ -98,18 +94,18 @@ def _draw_skeleton(img, boxes, kpses):
             continue
         for k in range(len(SKELETON)):
             if k < len(KPS_COLORS):
-                kx = _clamp(round(kps[k][0]), 0, DISPLAY_SIZE[0] - 1)
-                ky = _clamp(round(kps[k][1]), 0, DISPLAY_SIZE[1] - 1)
+                kx = _clamp(round(kps[k][0] * DISPLAY_SIZE[0] // RGB888P_SIZE[0]), 0, DISPLAY_SIZE[0] - 1)
+                ky = _clamp(round(kps[k][1] * DISPLAY_SIZE[1] // RGB888P_SIZE[1]), 0, DISPLAY_SIZE[1] - 1)
                 if kps[k][2] > 0:
                     img.draw_circle(kx, ky, 5, KPS_COLORS[k], 4)
             ske = SKELETON[k]
             p1 = kps[ske[0] - 1]
             p2 = kps[ske[1] - 1]
             if p1[2] > 0.0 and p2[2] > 0.0:
-                p1x = _clamp(round(p1[0]), 0, DISPLAY_SIZE[0] - 1)
-                p1y = _clamp(round(p1[1]), 0, DISPLAY_SIZE[1] - 1)
-                p2x = _clamp(round(p2[0]), 0, DISPLAY_SIZE[0] - 1)
-                p2y = _clamp(round(p2[1]), 0, DISPLAY_SIZE[1] - 1)
+                p1x = _clamp(round(p1[0] * DISPLAY_SIZE[0] // RGB888P_SIZE[0]), 0, DISPLAY_SIZE[0] - 1)
+                p1y = _clamp(round(p1[1] * DISPLAY_SIZE[1] // RGB888P_SIZE[1]), 0, DISPLAY_SIZE[1] - 1)
+                p2x = _clamp(round(p2[0] * DISPLAY_SIZE[0] // RGB888P_SIZE[0]), 0, DISPLAY_SIZE[0] - 1)
+                p2y = _clamp(round(p2[1] * DISPLAY_SIZE[1] // RGB888P_SIZE[1]), 0, DISPLAY_SIZE[1] - 1)
                 img.draw_line(p1x, p1y, p2x, p2y, LIMB_COLORS[k], 4)
 
 
@@ -120,60 +116,53 @@ def on_frame(img):
     累积死机),非检测帧用缓存骨架画(稳定不闪)。
     """
     global _det_counter, _last_pose, _last_slots
-    global _thermal_mode, _thermal_counter
     if _RUNTIME is None or _body_kp is None:
         return
     boxes, kpses = _last_pose
     slots = []
-    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
-    _thermal_counter += 1
-    if _thermal_counter % 30 == 0:
-        _new_mode = thermal_mode(read_temperature())
-        if _new_mode != _thermal_mode:
-            if _new_mode:
-                print("[body_detect] thermal mode=%d" % _new_mode)
-            _thermal_mode = _new_mode
+    # 检测降频:固定每 DET_INTERVAL 帧一次,不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
+    do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07)
-        img_np = img.to_numpy_ref()
-        if not _body_kp.input_is_packed:
-            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-            _planar[0] = img_np[:, :, 0]
-            _planar[1] = img_np[:, :, 1]
-            _planar[2] = img_np[:, :, 2]
-            img_np = _planar
-        try:
-            res = _body_kp.run(img_np)
-        except Exception as e:
-            print("[body_detect] run error: %s" % e)
-            res = ([], [])
-        if not _body_kp.input_is_packed:
-            del _planar
-        del img_np
-        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
-        boxes = res[0] or []
-        kpses = res[1] or []
-        _last_pose = (boxes, kpses)
-        # 槽位:id = 按 (x,y) 升序后的目标序号(最左=1),learned 恒 0
-        # aidemo 人体框可能只有 4 元 [l,t,r,b] 无 score → 缺省 conf=100
-        items = []
-        for i in range(len(boxes)):
+        # chn2 XGA RGBP888 硬件直出 planar(2026-08-12 对齐 face/object):
+        # 单通道 chn0 packed 须 921KB 软件重排;chn2 零重排。
+        # ⚠️ 必须 to_numpy_ref() 喂 run(Image 直喂致 nn.from_numpy 挂死)
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        if img_ai is None:
+            # chn2 取帧失败兜底:跳过本帧检测(保留缓存骨架,防异常杀循环)
+            do_det = False
+        else:
+            img_np = img_ai.to_numpy_ref()
             try:
-                bbox = [float(v) for v in boxes[i][:4]]
-                l, t, r, b = bbox
-                conf = int(float(boxes[i][4]) * 100) if len(boxes[i]) >= 5 else 100
-            except Exception:
-                continue
-            x = int(l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-            y = int(t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            w = int(r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
-            h = int(b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
-            items.append((x, y, w, h, conf))
-        items.sort(key=lambda t: (t[0], t[1]))
-        slots = [(i + 1, x, y, w, h, conf)
-                 for i, (x, y, w, h, conf) in enumerate(items)]
+                res = _body_kp.run(img_np)
+            except Exception as e:
+                print("[body_detect] run error: %s" % e)
+                res = ([], [])
+            # 推理完成立即释放 chn2 帧引用(缩短与显示 DMA 共存期,坑#16)
+            del img_np
+            del img_ai
+            gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:防累积死机)
+            boxes = res[0] or []
+            kpses = res[1] or []
+            _last_pose = (boxes, kpses)
+            # 槽位:id = 按 (x,y) 升序后的目标序号(最左=1),learned 恒 0
+            # aidemo 人体框可能只有 4 元 [l,t,r,b] 无 score → 缺省 conf=100
+            items = []
+            for i in range(len(boxes)):
+                try:
+                    bbox = [float(v) for v in boxes[i][:4]]
+                    l, t, r, b = bbox
+                    conf = int(float(boxes[i][4]) * 100) if len(boxes[i]) >= 5 else 100
+                except Exception:
+                    continue
+                x = int(l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+                y = int(t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+                w = int(r - l) * DISPLAY_SIZE[0] // RGB888P_SIZE[0]
+                h = int(b - t) * DISPLAY_SIZE[1] // RGB888P_SIZE[1]
+                items.append((x, y, w, h, conf))
+            items.sort(key=lambda t: (t[0], t[1]))
+            slots = [(i + 1, x, y, w, h, conf)
+                     for i, (x, y, w, h, conf) in enumerate(items)]
     # 画骨架:每帧(检测帧新骨架/非检测帧缓存骨架)
     _draw_skeleton(img, boxes, kpses)
     # 屏幕居中绿色十字(对准参考):VGA 640×480 中心 (320, 240)
@@ -314,7 +303,10 @@ def run(runtime):
                     pass
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            time.sleep_ms(lv.task_handler())
+            lv.task_handler()
+            # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
+            # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
+            time.sleep_ms(5)
             fc += 1
             if fc % 30 == 0:
                 print("[body_detect] fc=%d" % fc)

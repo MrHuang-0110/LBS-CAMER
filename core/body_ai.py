@@ -18,8 +18,10 @@ from libs.AIBase import AIBase
 from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 
-# AI 通道分辨率 = 显示通道分辨率(单通道:chn0 VGA 640x480 显示+推理)
-RGB888P_SIZE = [640, 480]
+# AI 通道分辨率 = chn2 XGA 1024x768(2026-08-12 对齐 face/object 硬件直出)。
+# 单通道 chn0 packed 须 921KB 软件重排;chn2 RGBP888 planar 直出零重排。
+# ⚠️ ISP chn2 不支持 VGA 小尺寸,配 XGA(坑#20)。
+RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
 # kmodel 路径(匹配 demo 实验6 存放位置)
