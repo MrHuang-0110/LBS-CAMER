@@ -30,10 +30,11 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-# 检测降频:每 DET_INTERVAL 帧跑一次 NPU,其余帧用缓存结果画框
-# 2026-08-07 板端: 2→3(纯 Python postprocess 慢,降推理频率提平均帧率)
-# 2026-08-12 去保护:不再按温度放大间隔(对齐 face_detect),恢复固定 3 帧
-DET_INTERVAL = 3
+# 检测降频自适应(2026-08-12 对齐 face_detect):有目标每帧检测(框零滞后);
+# 无目标 6 帧一次(降 NPU 负载防过热)。原固定 3 帧是 2026-08-07 纯 Python
+# postprocess 慢的权衡,升级自适应后有目标跟手、无目标更省电。
+DET_INTERVAL_ACTIVE = 1  # 检测到目标:每帧检测一次(实时,官方同构)
+DET_INTERVAL_IDLE = 6    # 无目标:每 6 帧检测一次(降 NPU 负载防过热)
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
@@ -57,6 +58,11 @@ def _rect_area(det):
     return (det[2] - det[0]) * (det[3] - det[1])
 
 
+def _det_interval(had_objects):
+    """自适应检测间隔:有目标保持实时(ACTIVE),无目标降频降温(IDLE)。"""
+    return DET_INTERVAL_ACTIVE if had_objects else DET_INTERVAL_IDLE
+
+
 _RUNTIME = None
 _screen = None
 _top_bar = None
@@ -69,7 +75,8 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
-_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑 NPU)
+_det_counter = 0          # 检测降频计数(每自适应间隔帧跑 NPU)
+_last_had_objects = True  # 上轮检测是否有目标(自适应间隔:有目标高频/无目标低频)
 _last_max = {}            # 上轮 per_class_max 缓存(非检测帧画框用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
@@ -120,13 +127,13 @@ def on_frame(img):
     """
     if _RUNTIME is None or _object_det is None:
         return
-    global _det_counter, _last_max, _last_slots, _last_names
+    global _det_counter, _last_max, _last_slots, _last_names, _last_had_objects
     per_class_max = _last_max
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, COCO 类别名)],仅已注册槽位
-    # 检测降频:固定每 DET_INTERVAL 帧检测一次,不再被温度放大(2026-08-12 去保护)
+    # 检测降频:自适应(无目标低频/有目标高频),不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % _det_interval(_last_had_objects) == 0)
     if do_det:
         # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
         # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
@@ -164,6 +171,7 @@ def on_frame(img):
             if cur is None or _rect_area(rect) > _rect_area(cur):
                 per_class_max[cid] = rect
         _last_max = per_class_max
+        _last_had_objects = bool(per_class_max)  # 更新自适应间隔状态(无目标→下次低频)
         # KEY2 注册:当前帧最大框的类别(检测帧才有新鲜 dets)
         if _id_registry is not None and _id_registry.has_pending() and per_class_max:
             max_cid = max(per_class_max.values(), key=_rect_area)[5]
