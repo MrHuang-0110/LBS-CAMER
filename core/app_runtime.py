@@ -291,10 +291,11 @@ class AppRuntime:
             # 后续完善时改 app.py 的 _DETECTION_ENABLED=True 并恢复 chn1 QVGA RGB565 检测。
             pass
         elif category_id == "gesture_detect":
-            # 单通道(死机根治 2026-08-07,同 object_detect):仅 chn0 VGA
-            # RGB888 显示+AI 推理(手部检测 512 输入 VGA 够用),无 chn2 大帧
-            # DMA 竞争。
-            pass
+            # 卡顿修复(2026-08-12):加 chn2 XGA RGBP888 作 AI 输入(对齐
+            # face_detect/object_detect)。单通道 chn0 packed 须每检测帧 921KB
+            # 软件重排;chn2 RGBP888 planar 硬件直出零重排。
+            # ⚠️ chn2 framesize 必须 XGA:ISP chn2 不支持 VGA 小尺寸(坑#20)。
+            chs.append((CAM_CHN_ID_2, Sensor.XGA, Sensor.RGBP888))
         elif category_id == "body_detect":
             # 单通道(死机根治 2026-08-07,同 object_detect):换 yolov8n-pose
             # 姿态模型(输入 320x320)后仅 chn0 VGA RGB888 显示+AI 推理,

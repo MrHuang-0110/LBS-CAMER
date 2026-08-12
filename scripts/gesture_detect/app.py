@@ -13,14 +13,12 @@ import os
 import sys
 import time
 import lvgl as lv
-import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0
+from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line, read_temperature
-from core.thermal import thermal_mode, cooled_interval
+from core.diagnostics import diag_line
 from core.id_registry import IdRegistry
 from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
@@ -61,8 +59,6 @@ _clear_btn = None
 _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整 run)
-_thermal_mode = 0         # 温度保护模式(0 正常/1 降频/2 冷却,core/thermal)
-_thermal_counter = 0      # 温度读取计数(每 30 帧读一次 machine.temperature)
 _last_det = ([], [])      # 上轮 (det_boxes, feats) 缓存
 _last_rec = {}            # 上轮识别结果 {det_idx: slot}
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
@@ -149,44 +145,35 @@ def on_frame(img):
     检测/识别一体降频(DET_INTERVAL):run 后立即 gc 回收原生缓冲,防坑#16。
     """
     global _det_counter, _last_det, _last_rec, _last_slots, _last_names
-    global _thermal_mode, _thermal_counter
     if _RUNTIME is None or _hand_rec is None:
         return
     det_boxes, feats = _last_det
     rec = _last_rec
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, 固定名 GESTURE)],仅已注册槽位
-    # 温度保护:每 30 帧读一次温度更新热模式(超温强制放大检测间隔防 100°C 死机)
-    _thermal_counter += 1
-    if _thermal_counter % 30 == 0:
-        _new_mode = thermal_mode(read_temperature())
-        if _new_mode != _thermal_mode:
-            if _new_mode:
-                print("[gesture_detect] thermal mode=%d" % _new_mode)
-            _thermal_mode = _new_mode
+    # 检测降频:固定每 DET_INTERVAL 帧一次,不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % cooled_interval(DET_INTERVAL, _thermal_mode) == 0)
+    do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        # 单通道:AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争(死机根治 2026-08-07,
-        # 官方 ai_lvgl 同构)。img_np 是视图,run 后 del 释放,帧缓冲仍由主循环
-        # img 持有至 show_image。
-        img_np = img.to_numpy_ref()
-        if not _hand_rec.input_is_packed:
-            _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-            _planar[0] = img_np[:, :, 0]
-            _planar[1] = img_np[:, :, 1]
-            _planar[2] = img_np[:, :, 2]
-            img_np = _planar
-        try:
-            det_boxes, feats = _hand_rec.run(img_np)
-        except Exception as e:
-            print("[gesture_detect] run error: %s" % e)
-            det_boxes, feats = [], []
-        if not _hand_rec.input_is_packed:
-            del _planar
-        del img_np
-        gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
-        _last_det = (det_boxes, feats)
+        # chn2 XGA RGBP888 硬件直出 planar(2026-08-12 对齐 face/object):
+        # 单通道 chn0 packed 须 921KB 软件重排;chn2 零重排。
+        # ⚠️ 必须 to_numpy_ref() 喂 run(Image 直喂致 nn.from_numpy 挂死)
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        if img_ai is None:
+            # chn2 取帧失败兜底:跳过本帧检测(保留缓存结果,防异常杀循环)
+            do_det = False
+        else:
+            img_np = img_ai.to_numpy_ref()
+            try:
+                det_boxes, feats = _hand_rec.run(img_np)
+            except Exception as e:
+                print("[gesture_detect] run error: %s" % e)
+                det_boxes, feats = [], []
+            # 推理完成立即释放 chn2 帧引用(缩短与显示 DMA 共存期,坑#16)
+            del img_np
+            del img_ai
+            gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
+            _last_det = (det_boxes, feats)
         # 特征匹配填槽(帧内 ID 去重:一个 slot 只标一个框;未学习上报 id=0)
         rec = {}
         filled_slots = set()
@@ -499,7 +486,10 @@ def run(runtime):
                 gesture_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            time.sleep_ms(lv.task_handler())
+            lv.task_handler()
+            # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
+            # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
+            time.sleep_ms(5)
             fc += 1
             if fc % 30 == 0:
                 print("[gesture_detect] fc=%d" % fc)
