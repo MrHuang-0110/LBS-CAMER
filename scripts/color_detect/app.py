@@ -17,6 +17,8 @@ from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.color_db import ColorDB
 from core.geometry import clamp_rect
+from core.status_hud import status_text
+from core.diagnostics import read_temperature
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -105,6 +107,7 @@ def _make_threshold(lab):
 
 
 _RUNTIME = None
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -354,7 +357,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """顶栏(返回+标题) + 左表 + 透明预览(可取色) + 底栏(list+6格+滑块)。"""
-    global _screen, _top_bar, _bottom_bar, _preview, _table, _slider
+    global _screen, _top_bar, _bottom_bar, _preview, _table, _slider, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -413,6 +416,12 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     # 左表(自建 4×3 网格,非 lv.table):顶栏左下方,叠在预览区左缘。
     # 用 obj 网格而非 lv.table —— table cell 默认白底+选中外框不可控,
@@ -515,14 +524,14 @@ def _build_ui(runtime, exit_flag):
         list_img.set_zoom(lzoom)
         list_img.center()
 
-    # 6 阈值格铺满底栏中段:list(48) 之后到计数(右~90)之间均分
-    _COUNT_W = 90
+    # 6 阈值格铺满底栏(2026-08-13):list(48) 之后到右缘均分。
+    # 原右侧预留 _COUNT_W=90 计数区但无内容(空区),去掉后 6 格铺满 640。
     _cells_start = 56
-    _cells_total = 640 - _cells_start - _COUNT_W
+    _cells_total = 640 - _cells_start
     _cell_w = _cells_total // 6
     for i, (key, label_text, lo, hi, dflt) in enumerate(THRESH_CELLS):
         _make_cell(_bottom_bar, key, label_text, lo, hi, dflt,
-                   _cells_start + i * _cell_w, _cell_w - 4)
+                   _cells_start + i * _cell_w, _cell_w - 2)
 
 
 def _current_threshold_tuple():
@@ -709,8 +718,9 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _color_db, _pending_clear_flush
+    global _RUNTIME, _color_db, _pending_clear_flush, _hud_t0
     _RUNTIME = runtime
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     _color_db = ColorDB()
     _color_db.load_from_disk(_COLOR_DB_PATH)  # 启动加载（首次 task_handler 前安全窗口）
     exit_flag = [False]
@@ -739,6 +749,13 @@ def run(runtime):
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(), 0))
             if fc % 30 == 0:
                 print("[color_detect] fc=%d" % fc)
     finally:

@@ -16,21 +16,24 @@ import time
 import lvgl as lv
 import ulab.numpy as np
 from media.display import Display
-from media.sensor import CAM_CHN_ID_0
+from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.id_registry import IdRegistry
 from core.object_classify_ai import ObjectClassifyRecognition, \
     OBJ_RECO_KMPATH, RGB888P_SIZE, DISPLAY_SIZE
 from core.object_classify_db import object_classify_db, database_search
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.status_hud import status_text
+from core.thermal import ThermalGuard
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 # 中心退化区域(224×224,VGA 画面中心):YOLO(COCO80)未检到时学习退化用,
 # 任意物体对准中央即可学,不受类别限制(2026-08-07 用户反馈)
-CENTER_BOX = [208, 128, 432, 352]
+CENTER_BOX = [333, 205, 691, 563]  # chn2 XGA 1024x768 中心区域(2026-08-13 加 chn2:
+# 原 VGA [208,128,432,352] ×1.6 缩放;显示侧 _to_disp_boxes 按 DISPLAY/RGB888P 自动回 VGA)
 BAR_BG = 0x1A1A1A
 
 # 25 槽画框颜色表(1~4 历史色 + 5~25 色环;学习 ID 不用白色),共享 core/box_colors
@@ -55,22 +58,15 @@ def _draw_color(hex_color):
     return (0xFF, b, g, r)
 
 
-def _ai_input(img):
-    """chn0 packed 帧 → AI 输入 img_np。
+def _ai_input(img_ai):
+    """chn2 XGA RGBP888 planar 帧 → AI 输入(0 重排,2026-08-13 对齐 face)。
 
-    input_is_packed(ai2d 支持 RGB888p_FMT 枚举)时零拷贝直接喂 chn0 帧视图;
-    否则 NCHW(planar 语义)须 np.zeros 建 (3,H,W) 并逐通道重排(2026-08-07
-    全屏假框根因;ai2d build 声明 [1,3,H,W],重排喂省略 batch=1 的 (3,H,W))。
-    调用方推理后须 del img_np 立即释放引用(planar 时即释放重排缓冲)。
+    单通道 chn0 packed 须每帧 921KB 软件重排(on_max=136ms);chn2 RGBP888
+    planar 硬件直出,to_numpy_ref() 零拷贝 planar 视图直接喂 ai2d(NCHW),
+    不再需要 packed→planar 重排(同 face/object/gesture/body)。
+    ⚠️ 必须 to_numpy_ref() 喂(直接传 Image 对象致 nn.from_numpy 挂死)。
     """
-    img_np = img.to_numpy_ref()
-    if _ocr.input_is_packed:
-        return img_np
-    _planar = np.zeros((3, img.height(), img.width()), dtype=np.uint8)
-    _planar[0] = img_np[:, :, 0]
-    _planar[1] = img_np[:, :, 1]
-    _planar[2] = img_np[:, :, 2]
-    return _planar
+    return img_ai.to_numpy_ref()
 
 
 def _to_disp_boxes(det_boxes):
@@ -96,6 +92,8 @@ def _draw_preview_box(img, color, thickness):
 
 
 _RUNTIME = None
+_guard = None  # DVFS 温度保护(ThermalGuard,2026-08-13 根治)
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -168,7 +166,7 @@ def on_frame(img):
     固定区域提特征,任意物体对准中央即可学/识别(不依赖 YOLO 类别)。
     无已学 ID:零 NPU 推理,纯预览 + 中央绿十字。识别(DB 非空):每
     DET_INTERVAL 帧中心区域提特征 + database_search;命中 → 预览区
-    槽位色框 + 左上角槽位色 ID。单通道(AI 吃 chn0 帧,死机根治)。
+    槽位色框 + 左上角槽位色 ID。AI 吃 chn2 XGA RGBP888(2026-08-13 加通道)。
     """
     global _det_counter, _last_det, _last_disp, _last_slots, _last_names, _record_flash
     if _RUNTIME is None or _ocr is None:
@@ -207,23 +205,32 @@ def on_frame(img):
     _det_counter += 1
     do_det = (_det_counter % DET_INTERVAL == 0)
     if do_det:
-        # 单通道(死机根治 2026-08-07):AI 直接吃 chn0 显示帧,无 chn2 DMA 竞争
+        # chn2 取 AI 输入(2026-08-13 对齐 face/object/gesture/body):XGA RGBP888
+        # planar 硬件直出,to_numpy_ref() 零拷贝直喂,消 921KB 软件重排
         img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
+        img_ai = None
         try:
-            img_np = _ai_input(img)
-            feat = _ocr.extract_feature(CENTER_BOX, img_np)
-            if feat is not None:
-                det_boxes = [list(CENTER_BOX) + [1.0, 0]]
-                features = [feat]
-            else:
+            img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+            if img_ai is None:
                 det_boxes, features = [], []
+            else:
+                img_np = _ai_input(img_ai)
+                feat = _ocr.extract_feature(CENTER_BOX, img_np)
+                if feat is not None:
+                    det_boxes = [list(CENTER_BOX) + [1.0, 0]]
+                    features = [feat]
+                else:
+                    det_boxes, features = [], []
         except Exception as e:
             print("[object_classify] run error: %s" % e)
             det_boxes, features = [], []
         _last_det = (det_boxes, features)
-        # 推理完成立即释放 numpy 引用;帧内 gc 回收 NPU 原生缓冲(坑#16:防累积死机)
+        # 推理完成立即释放 numpy/chn2 帧引用(缩短与显示 DMA 共存期,坑#16);
+        # 帧内 gc 回收 NPU 原生缓冲(防累积死机)
         if img_np is not None:
             del img_np
+        if img_ai is not None:
+            del img_ai
         gc.collect()
         disp_boxes = _to_disp_boxes(det_boxes)
         _last_disp = disp_boxes
@@ -274,10 +281,13 @@ def _learn_center(img):
     """
     global _det_counter, _record_flash, _record_slot
     img_np = None  # 预绑定:输入准备异常时后续 del 不掩真异常
+    img_ai = None
     feature = None
     try:
-        img_np = _ai_input(img)
-        feature = _ocr.extract_feature(CENTER_BOX, img_np)
+        img_ai = _RUNTIME.sensor.snapshot(chn=CAM_CHN_ID_2)
+        if img_ai is not None:
+            img_np = _ai_input(img_ai)
+            feature = _ocr.extract_feature(CENTER_BOX, img_np)
     except Exception as e:
         print("[object_classify] learn error: %s" % e)
     if feature is not None:
@@ -298,6 +308,8 @@ def _learn_center(img):
             _RUNTIME.buzzer.beep(ms=200)  # 提特征失败,学习失败提示
     if img_np is not None:
         del img_np
+    if img_ai is not None:
+        del img_ai
     gc.collect()
 
 
@@ -394,17 +406,20 @@ def _on_tab_clicked(e, sid):
 
 
 def _refresh_tabs():
-    """按 _selected_id 刷新选项卡高亮(选中绿色,未选深灰)。"""
+    """按 _selected_id 刷新选项卡高亮(选中柔和绿,未选深灰)。
+
+    选中色 0x2E7D32 对齐 tag_detect CARD_ACTIVE(2026-08-13 用户要求
+    两脚本底部选中效果一致;原纯绿刺眼已换柔和绿)。"""
     for i, tab in enumerate(_tabs):
         if i + 1 == _selected_id:
-            tab.set_style_bg_color(lv.color_hex(0x00FF00), 0)
+            tab.set_style_bg_color(lv.color_hex(0x2E7D32), 0)
         else:
             tab.set_style_bg_color(lv.color_hex(0x2A2A2A), 0)
 
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent clickable preview area, and bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -463,6 +478,13 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     # 透明预览区(透出 OSD1,可点击锁定物体)
     _preview = lv.obj(screen)
@@ -571,8 +593,10 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME, _pending_clear_flush
+    global _RUNTIME, _pending_clear_flush, _guard
     _RUNTIME = runtime
+    _guard = ThermalGuard()
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     exit_flag = [False]
     _init_ai()
     _init_registry(runtime.fpioa)
@@ -597,9 +621,30 @@ def run(runtime):
                 _pending_clear_flush = False
                 object_classify_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
-            gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            time.sleep_ms(lv.task_handler())
+            # 主循环 gc 每 2 帧(2026-08-13 二轮对齐 face):省 ~1-3ms/帧 CPU 活跃
+            if fc % 2 == 0:
+                gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
+            # LVGL 每 2 帧刷新(2026-08-13 二轮):顶/底栏静态,框走 OSD1 不属 LVGL;
+            # 每帧 FULL 重渲染是 CPU 热源,lvtask ~2.5ms/帧 → 平均 1.25ms。
+            # ⚠️ 上轮改 sleep 时误删 task_handler 调用,此处补回(否则 UI 不刷新)
+            if fc % 2 == 0:
+                lv.task_handler()
+            # 睡眠固定 5ms(2026-08-13 对齐 face/object/gesture/body):K230
+            # time.sleep_ms 忙等,LvGL 建议的动态空转(约 30ms)是忙等热源;
+            # 固定 5ms 降温 5~6°C(object_classify 原用 lv.task_handler() 动态空转)
+            time.sleep_ms(5)
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(),
+                                                   len(_last_slots or [])))
+            # DVFS 温度保护(2026-08-13 根治):每 30 帧读温调频,不拉长检测间隔(锁框跟手)
+            if _guard is not None and fc % 30 == 0:
+                _guard.tick(read_temperature())
             if fc % 30 == 0:
                 print("[object_classify] fc=%d" % fc)
                 if fc % 300 == 0:

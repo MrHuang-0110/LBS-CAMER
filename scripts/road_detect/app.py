@@ -16,6 +16,8 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.road_db import RoadDB
 from core.geometry import clamp_rect
+from core.status_hud import status_text
+from core.diagnostics import read_temperature
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -114,6 +116,7 @@ def _row_centroids(find_blobs_fn, blob_rect, step=8):
 
 
 _RUNTIME = None
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -369,6 +372,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     global _screen, _top_bar, _bottom_bar, _preview, _table, _count_label, _slider
+    global _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -426,6 +430,12 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     if not _DETECTION_ENABLED:
         # 预览模式:只顶栏 + chn0 全屏预览(OSD1 透出),不建左表/滑块/底栏。
@@ -691,8 +701,9 @@ def _destroy_ui():
 
 
 def run(runtime):
-    global _RUNTIME, _road_db, _pending_flush
+    global _RUNTIME, _road_db, _pending_flush, _hud_t0
     _RUNTIME = runtime
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     _road_db = RoadDB()
     entry = _road_db.load_from_disk(_ROAD_DB_PATH)
     if _DETECTION_ENABLED and entry is not None:
@@ -743,6 +754,13 @@ def run(runtime):
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(), 0))
             if fc % 30 == 0:
                 print("[road_detect] fc=%d" % fc)
     finally:

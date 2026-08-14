@@ -102,5 +102,8 @@
   "common": {
     "back": "返回",
     "app_name": "CamerAi"
+  },
+  "status": {
+    "format": "{fps}fps {temp}C {n}"
   }
 }

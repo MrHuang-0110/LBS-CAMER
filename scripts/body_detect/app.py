@@ -19,24 +19,31 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.body_ai import PersonKeyPointApp, PERSON_KP_KMPATH, \
     SKELETON, KPS_COLORS, LIMB_COLORS, RGB888P_SIZE, DISPLAY_SIZE
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.status_hud import status_text
+from core.thermal import ThermalGuard
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
 PREVIEW_H = 376
 BAR_BG = 0x1A1A1A
 
-# 检测降频:每 DET_INTERVAL 帧跑一次 NPU(非检测帧用缓存骨架画,减 DMA/NPU 竞争)
-# 2026-08-07 板端反馈卡顿: 2→3(同 object_detect 提平均帧率)
-DET_INTERVAL = 3
+# 检测降频自适应(2026-08-13 对齐 face/object):有目标每 2 帧检测(跟手),
+# 无目标 6 帧一次(静止场景 NPU 低负载)。非检测帧用缓存骨架画(稳定不闪)。
+# 原固定 3 帧(2026-08-07 板端反馈卡顿 2→3 提帧率);自适应后按场景自调。
+DET_INTERVAL_ACTIVE = 2  # 检测到目标:每 2 帧检测(pose 模型大+骨架绘制,摊薄开销)
+DET_INTERVAL_IDLE = 6    # 无目标:每 6 帧检测(降 NPU 负载防过热)
 
 _RUNTIME = None
+_guard = None  # DVFS 温度保护(ThermalGuard,2026-08-13 根治)
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
 _preview = None
 _body_kp = None
-_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整推理)
+_det_counter = 0          # 检测降频计数(每自适应间隔帧跑完整推理)
+_last_had_people = False  # 上轮检测是否有人(自适应间隔:有人高频/无人低频)
 _last_pose = ([], [])     # 上轮 (boxes, kpses) 缓存
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 
@@ -109,20 +116,25 @@ def _draw_skeleton(img, boxes, kpses):
                 img.draw_line(p1x, p1y, p2x, p2y, LIMB_COLORS[k], 4)
 
 
-def on_frame(img):
-    """单通道推理 -> 骨架绘制 -> host_tick(0x11,id=目标排序序号)。
+def _det_interval(had_people):
+    """自适应检测间隔:有人保持高频(ACTIVE),无人降频降温(IDLE)。"""
+    return DET_INTERVAL_ACTIVE if had_people else DET_INTERVAL_IDLE
 
-    降频:检测帧跑完整 run(chn0 帧推理,run 后立即 gc 回收原生缓冲,防坑#16
+
+def on_frame(img):
+    """推理 -> 骨架绘制 -> host_tick(0x11,id=目标排序序号)。
+
+    降频:检测帧跑完整 run(chn2 AI 输入,run 后立即 gc 回收原生缓冲,防坑#16
     累积死机),非检测帧用缓存骨架画(稳定不闪)。
     """
-    global _det_counter, _last_pose, _last_slots
+    global _det_counter, _last_pose, _last_slots, _last_had_people
     if _RUNTIME is None or _body_kp is None:
         return
     boxes, kpses = _last_pose
     slots = []
-    # 检测降频:固定每 DET_INTERVAL 帧一次,不再被温度放大(2026-08-12 去保护)
+    # 检测降频:纯自适应(有人高频/无人低频),不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % _det_interval(_last_had_people) == 0)
     if do_det:
         # chn2 XGA RGBP888 硬件直出 planar(2026-08-12 对齐 face/object):
         # 单通道 chn0 packed 须 921KB 软件重排;chn2 零重排。
@@ -145,6 +157,7 @@ def on_frame(img):
             boxes = res[0] or []
             kpses = res[1] or []
             _last_pose = (boxes, kpses)
+            _last_had_people = len(boxes) > 0  # 更新自适应间隔状态(有人→下次高频)
             # 槽位:id = 按 (x,y) 升序后的目标序号(最左=1),learned 恒 0
             # aidemo 人体框可能只有 4 元 [l,t,r,b] 无 score → 缺省 conf=100
             items = []
@@ -178,7 +191,7 @@ def on_frame(img):
 
 def _build_ui(runtime, exit_flag):
     """顶栏(back+标题) + 透明预览 + 底栏背景(无功能按钮)。"""
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -238,6 +251,13 @@ def _build_ui(runtime, exit_flag):
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
 
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
+
     _preview = lv.obj(screen)
     _preview.set_size(lv.pct(100), PREVIEW_H)
     _preview.set_pos(0, PREVIEW_Y)
@@ -283,8 +303,10 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py. 单线程主循环。"""
-    global _RUNTIME
+    global _RUNTIME, _guard
     _RUNTIME = runtime
+    _guard = ThermalGuard()
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     exit_flag = [False]
     _init_ai()
     _build_ui(runtime, exit_flag)
@@ -302,12 +324,28 @@ def run(runtime):
                 except Exception:
                     pass
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
-            gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            lv.task_handler()
+            # 主循环 gc 每 2 帧(2026-08-13 二轮对齐 face):省 ~1-3ms/帧 CPU 活跃
+            if fc % 2 == 0:
+                gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
+            # LVGL 每 2 帧刷新(2026-08-13 二轮):顶/底栏静态,框走 OSD1 不属 LVGL;
+            # 每帧 FULL 重渲染是 CPU 热源,lvtask ~2.5ms/帧 → 平均 1.25ms
+            if fc % 2 == 0:
+                lv.task_handler()
             # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
             # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
             time.sleep_ms(5)
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(),
+                                                   len(_last_slots or [])))
+            # DVFS 温度保护(2026-08-13 根治):每 30 帧读温调频,不拉长检测间隔(锁框跟手)
+            if _guard is not None and fc % 30 == 0:
+                _guard.tick(read_temperature())
             if fc % 30 == 0:
                 print("[body_detect] fc=%d" % fc)
                 if fc % 300 == 0:

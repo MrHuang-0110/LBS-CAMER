@@ -17,6 +17,8 @@ from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core import tag_scan
 from core import tag_mode
+from core.status_hud import status_text
+from core.diagnostics import read_temperature
 from core.geometry import clamp_rect
 
 BAR_H = 52
@@ -31,6 +33,7 @@ DET_SCALE = 2
 BOX_WHITE = (0xFF, 0xFF, 0xFF, 0xFF)
 
 _RUNTIME = None
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -103,6 +106,17 @@ def _switch_fn(fn):
             lv.color_hex(CARD_ACTIVE if fn == "qr" else CARD_BG), 0)
 
 
+def remote_switch_fn(fn):
+    """主机同模式快捷切换入口(2026-08-13):不 reset,直接切底部功能选择。
+
+    main.py 在"当前已是 tag_detect 且收到 mode 0x14/0x15"时调用。走
+    _switch_fn(目标即当前 → 不动;不同 → 改内存+置 dirty+UI 高亮),
+    dirty 由主循环落盘 .tag_fn。与本地点击功能卡片等价。
+    """
+    print("[tag_detect] remote switch fn -> %s (current=%s)" % (fn, _active_fn))
+    _switch_fn(fn)
+
+
 def _make_card(parent, label_key, fn, align_to):
     """建一个功能卡片(可点击切换)。返回 card obj。"""
     from ui.theme import make_back_bar_text_style
@@ -129,7 +143,7 @@ def _make_card(parent, label_key, fn, align_to):
 def _build_ui(runtime, exit_flag):
     """顶栏(back+标题) + 透明预览 + 底栏(list占位图标 + AprilTag/QR卡片)。"""
     global _screen, _top_bar, _bottom_bar, _preview
-    global _april_card, _qr_card
+    global _april_card, _qr_card, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     _screen = screen
@@ -188,6 +202,12 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     # 透明预览区(透出 OSD1)
     _preview = lv.obj(screen)
@@ -263,8 +283,9 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _active_fn, _tag_fn_dirty
+    global _RUNTIME, _active_fn, _tag_fn_dirty, _hud_t0
     _RUNTIME = runtime
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     # 记忆启动:按 .tag_fn 上次选择决定初始功能(首次 task_handler 前安全窗口读取)
     _active_fn = tag_mode.read_tag_fn()
     _tag_fn_dirty = False
@@ -290,6 +311,13 @@ def run(runtime):
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(), 0))
             if fc % 30 == 0:
                 print("[tag_detect] fc=%d" % fc)
     finally:

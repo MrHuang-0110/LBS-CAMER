@@ -18,7 +18,9 @@ from core.id_registry import IdRegistry
 from core.object_ai import ObjectDetectionApp, COCO_LABELS
 from core.object_db import ObjectDB
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.status_hud import status_text
+from core.thermal import ThermalGuard
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -34,6 +36,11 @@ LEARNED_FLAG = 0x80
 # 每帧开销大,调 2 摊薄(约 30ms 一框仍跟手);无目标 6 帧降 NPU 负载。
 DET_INTERVAL_ACTIVE = 2  # 检测到目标:每 2 帧检测一次(摊薄 postprocess 开销)
 DET_INTERVAL_IDLE = 6    # 无目标:每 6 帧检测一次(降 NPU 负载防过热)
+
+# 画框平滑(2026-08-13):非检测帧向最新检测框 lerp 逼近的比例。
+# ACTIVE=2 下检测帧-非检测帧-检测帧交替,非检测帧走一半 → 框在相邻检测
+# 帧间连续移动(不跳变),观感流畅。0=不平滑,1=直接跳。
+SMOOTH_ALPHA = 0.5
 
 KMODEL_PATH = "/sdcard/examples/kmodel/yolov8n_320.kmodel"
 _OBJ_DB_PATH = "/sdcard/CamerAi/data/object_db.json"
@@ -65,6 +72,8 @@ def _det_interval(had_objects):
 
 
 _RUNTIME = None
+_guard = None  # DVFS 温度保护(ThermalGuard,2026-08-13 根治)
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -78,6 +87,8 @@ _save_btn = None
 _close_overlay = False
 _det_counter = 0          # 检测降频计数(每自适应间隔帧跑 NPU)
 _last_had_objects = True  # 上轮检测是否有目标(自适应间隔:有目标高频/无目标低频)
+_smooth_disp = {}         # 当前显示框 class_id->[x,y,w,h](VGA,平滑后,2026-08-13)
+_smooth_target = {}       # 最新检测帧目标框 class_id->[x,y,w,h](平滑基准)
 _last_max = {}            # 上轮 per_class_max 缓存(非检测帧画框用)
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
 _last_names = None        # 上轮名称帧列表(非检测帧复用)
@@ -120,15 +131,16 @@ def _deinit_ai():
 
 
 def on_frame(img):
-    """单通道检测 -> 每类取最大实例 -> 匹配 DB -> 画框 -> 十字 -> host_tick。
+    """检测 -> 每类取最大实例 -> 匹配 DB -> 画框 -> 十字 -> host_tick。
 
-    AI 直接吃传入的 chn0 显示帧(img.to_numpy_ref),无 chn2 独立帧(死机根治
-    2026-08-07)。每类别取面积最大实例画框+填槽,注册类彩色框+ID号+英文类名,
-    未注册白框。KEY2 注册当前帧最大框的类别。
+    AI 吃 chn2 XGA RGBP888(2026-08-12 加通道,消 921KB 软件重排)。每类别取
+    面积最大实例画框+填槽,注册类彩色框+ID号+英文类名,未注册白框。
+    KEY2 注册当前帧最大框的类别。
     """
     if _RUNTIME is None or _object_det is None:
         return
     global _det_counter, _last_max, _last_slots, _last_names, _last_had_objects
+    global _smooth_disp, _smooth_target
     per_class_max = _last_max
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, COCO 类别名)],仅已注册槽位
@@ -178,16 +190,39 @@ def on_frame(img):
                         _db.flush_to_disk(_OBJ_DB_PATH)  # 注册即写(task_handler 前安全窗口)
                 except Exception as e:
                     print("[object_detect] register error: %s" % e)
-    # 画框:每帧(检测帧新框/非检测帧缓存框;类别精确匹配每帧重算,无窜脸)
-    for cid, det in per_class_max.items():
+    # 画框平滑状态(2026-08-13):检测帧重置目标框并直接用新框;
+    # 非检测帧向最新目标框 lerp 逼近一半(SMOOTH_ALPHA)——框连续移动不跳变
+    if do_det:
+        _smooth_target = {}
+        for cid, det in per_class_max.items():
+            l, t, r, b = det[0], det[1], det[2], det[3]
+            _smooth_target[cid] = [
+                int(l) * DISPLAY_W // RGB888P_W,
+                int(t) * DISPLAY_H // RGB888P_H,
+                int(r - l) * DISPLAY_W // RGB888P_W,
+                int(b - t) * DISPLAY_H // RGB888P_H]
+        _smooth_disp = {cid: list(v) for cid, v in _smooth_target.items()}
+    else:
+        for cid, tgt in _smooth_target.items():
+            cur = _smooth_disp.get(cid)
+            if cur is None:
+                _smooth_disp[cid] = list(tgt)
+            else:
+                _smooth_disp[cid] = [cur[i] + int((tgt[i] - cur[i]) * SMOOTH_ALPHA)
+                                     for i in range(4)]
+        for cid in [c for c in _smooth_disp if c not in _smooth_target]:
+            del _smooth_disp[cid]
+
+    # 画框:每帧(检测帧新框/非检测帧平滑框;类别精确匹配每帧重算,无窜脸)
+    for cid, box in _smooth_disp.items():
+        det = per_class_max.get(cid)
+        if det is None:
+            continue  # 目标消失防御(正常由平滑更新清除)
         l, t, r, b, score, _ = det
-        slot, _score = _db.match(cid)
-        x = int(l) * DISPLAY_W // RGB888P_W
-        y = int(t) * DISPLAY_H // RGB888P_H
-        w = int(r - l) * DISPLAY_W // RGB888P_W
-        h = int(b - t) * DISPLAY_H // RGB888P_H
+        x, y, w, h = box
         # 收进可视区(模型输出贴边/异常值防越界 1px 驱动挂死)
         x, y, w, h = clamp_rect(x, y, w, h, DISPLAY_W, DISPLAY_H)
+        slot, _score = _db.match(cid)
         conf = int(score * 100)
         if slot is not None:
             color = _draw_color(BOX_COLORS.get(slot, BOX_UNKNOWN))
@@ -309,7 +344,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """顶栏(back+标题) + 透明预览 + 底栏(list图标 + 计数)。"""
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -369,6 +404,13 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     _preview = lv.obj(screen)
     _preview.set_size(lv.pct(100), PREVIEW_H)
@@ -450,8 +492,10 @@ def _destroy_ui():
 
 def run(runtime):
     """reset 框架入口。单线程主循环:snapshot chn0 -> on_frame -> show OSD1 -> task_handler。"""
-    global _RUNTIME, _db, _pending_clear_flush
+    global _RUNTIME, _db, _pending_clear_flush, _guard
     _RUNTIME = runtime
+    _guard = ThermalGuard()
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     _db = ObjectDB()
     _db.load_from_disk(_OBJ_DB_PATH)
     exit_flag = [False]
@@ -487,15 +531,31 @@ def run(runtime):
                     _db.flush_to_disk(_OBJ_DB_PATH)  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             _p3 = time.ticks_us()
-            gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
+            # 主循环 gc 每 2 帧(2026-08-13 二轮对齐 face):省 ~1-3ms/帧 CPU 活跃
+            if fc % 2 == 0:
+                gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
             _p4 = time.ticks_us()
-            lv.task_handler()
+            # LVGL 每 2 帧刷新(2026-08-13 二轮):顶/底栏静态,框走 OSD1 不属 LVGL;
+            # 每帧 FULL 重渲染是 CPU 热源,lvtask ~2.5ms/帧 → 平均 1.25ms
+            if fc % 2 == 0:
+                lv.task_handler()
             _p4b = time.ticks_us()
             # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
             # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
             time.sleep_ms(5)
             _p5 = time.ticks_us()
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(),
+                                                   len(_last_slots or [])))
+            # DVFS 温度保护(2026-08-13 根治):每 30 帧读温调频,不拉长检测间隔(锁框跟手)
+            if _guard is not None and fc % 30 == 0:
+                _guard.tick(read_temperature())
             # 30 帧窗口统计:on_min=普通帧、on_max=检测帧,对齐 face debug 输出
             _on_us = _p2 - _p1
             _win_on_sum += _on_us

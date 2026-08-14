@@ -18,7 +18,9 @@ from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_2
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
 from core.geometry import clamp_rect
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.status_hud import status_text
+from core.thermal import ThermalGuard
 from core.id_registry import IdRegistry
 from core.gesture_ai import HandRecognition, RGB888P_SIZE, DISPLAY_SIZE
 from core.gesture_db import gesture_db, GESTURE_DB_PATH
@@ -32,9 +34,10 @@ BAR_BG = 0x1A1A1A
 from core.box_colors import BOX_COLORS, BOX_UNKNOWN
 # conf 字节 bit7 = 已学习标记(对齐 comm/host_api.LEARNED_FLAG);conf 0~100 恒 <128 不冲突
 LEARNED_FLAG = 0x80
-# 检测/识别一体降频:每 DET_INTERVAL 帧跑一次完整 run(chn2 取流+NPU),
-# 其余帧用缓存框+缓存识别结果画框——降低 chn2 DMA 与显示 DMA 竞争(同 face_detect 死机修复)
-DET_INTERVAL = 2
+# 检测/识别一体降频自适应(2026-08-13 对齐 face/object):有手势每帧检测(实时),
+# 无手势 6 帧一次(降 NPU 负载防过热)。其余帧用缓存框+缓存识别结果画框。
+DET_INTERVAL_ACTIVE = 1  # 检测到手:每帧检测(实时,对齐 face 有目标模式)
+DET_INTERVAL_IDLE = 6    # 无手势:每 6 帧检测(静止场景 NPU 低负载)
 MIN_REG_AREA = 3600  # 注册最小手掌面积(rgb888p px²,≈60×60);太小拒绝注册
 
 
@@ -47,6 +50,8 @@ def _draw_color(hex_color):
 
 
 _RUNTIME = None
+_guard = None  # DVFS 温度保护(ThermalGuard,2026-08-13 根治)
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -58,7 +63,8 @@ _overlay = None
 _clear_btn = None
 _save_btn = None
 _close_overlay = False
-_det_counter = 0          # 检测降频计数(每 DET_INTERVAL 帧跑完整 run)
+_det_counter = 0          # 检测降频计数(每自适应间隔帧跑完整 run)
+_last_had_hand = False    # 上轮检测是否有手势(自适应间隔:有手高频/无手低频)
 _last_det = ([], [])      # 上轮 (det_boxes, feats) 缓存
 _last_rec = {}            # 上轮识别结果 {det_idx: slot}
 _last_slots = None        # 上轮槽位(非检测帧复用,主机数据连续)
@@ -135,25 +141,29 @@ def _draw_hand_boxes(img, det_boxes, rec):
             img.draw_rectangle(x, y, w, h, color=color, thickness=2)
 
 
-def on_frame(img):
-    """单通道推理 → 特征匹配 → 画框 + ID 标签 → host_tick。
+def _det_interval(had_hand):
+    """自适应检测间隔:有手势保持实时(ACTIVE),无手势降频降温(IDLE)。"""
+    return DET_INTERVAL_ACTIVE if had_hand else DET_INTERVAL_IDLE
 
-    单通道(死机根治 2026-08-07,同 object_detect):AI 直接吃传入 chn0 显示帧
-    (img.to_numpy_ref),无 chn2 独立大帧。每只手掌提取 4 维形态特征
+
+def on_frame(img):
+    """推理 → 特征匹配 → 画框 + ID 标签 → host_tick。
+
+    AI 吃 chn2 XGA RGBP888(2026-08-12 加通道)。每只手掌提取 4 维形态特征
     (hand_reco softmax 分布)→ gesture_db 余弦匹配 → 已学习显示 ID 彩色框,
     未学习白框。K2 注册只在检测帧(有新鲜 feats)。
-    检测/识别一体降频(DET_INTERVAL):run 后立即 gc 回收原生缓冲,防坑#16。
+    检测/识别一体降频(自适应):run 后立即 gc 回收原生缓冲,防坑#16。
     """
-    global _det_counter, _last_det, _last_rec, _last_slots, _last_names
+    global _det_counter, _last_det, _last_rec, _last_slots, _last_names, _last_had_hand
     if _RUNTIME is None or _hand_rec is None:
         return
     det_boxes, feats = _last_det
     rec = _last_rec
     slots = []   # 列表化:统一上限 25(原固定 4 槽),order_slots 按屏幕位置排序
     names = []   # 名称帧(类型 0x0E):[(id, 固定名 GESTURE)],仅已注册槽位
-    # 检测降频:固定每 DET_INTERVAL 帧一次,不再被温度放大(2026-08-12 去保护)
+    # 检测降频:纯自适应(有手高频/无手低频),不再被温度放大(2026-08-12 去保护)
     _det_counter += 1
-    do_det = (_det_counter % DET_INTERVAL == 0)
+    do_det = (_det_counter % _det_interval(_last_had_hand) == 0)
     if do_det:
         # chn2 XGA RGBP888 硬件直出 planar(2026-08-12 对齐 face/object):
         # 单通道 chn0 packed 须 921KB 软件重排;chn2 零重排。
@@ -174,6 +184,7 @@ def on_frame(img):
             del img_ai
             gc.collect()  # 帧内回收 NPU 原生缓冲(坑#16:多目标连续推理防累积死机)
             _last_det = (det_boxes, feats)
+            _last_had_hand = len(det_boxes) > 0  # 更新自适应间隔状态(有手→下次高频)
         # 特征匹配填槽(帧内 ID 去重:一个 slot 只标一个框;未学习上报 id=0)
         rec = {}
         filled_slots = set()
@@ -318,7 +329,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent preview area, and bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -378,6 +389,13 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     _preview = lv.obj(screen)
     _preview.set_size(lv.pct(100), PREVIEW_H)
@@ -459,8 +477,10 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME, _pending_clear_flush
+    global _RUNTIME, _pending_clear_flush, _guard
     _RUNTIME = runtime
+    _guard = ThermalGuard()
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     exit_flag = [False]
     _init_ai()
     _init_registry(runtime.fpioa)
@@ -485,12 +505,28 @@ def run(runtime):
                 _pending_clear_flush = False
                 gesture_db.flush_to_disk()  # 清除即写空库(task_handler 前安全窗口)
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
-            gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
-            lv.task_handler()
+            # 主循环 gc 每 2 帧(2026-08-13 二轮对齐 face):省 ~1-3ms/帧 CPU 活跃
+            if fc % 2 == 0:
+                gc.collect()  # 在 show_image 之后 GC,避免阻塞 DMA
+            # LVGL 每 2 帧刷新(2026-08-13 二轮):顶/底栏静态,框走 OSD1 不属 LVGL;
+            # 每帧 FULL 重渲染是 CPU 热源,lvtask ~2.5ms/帧 → 平均 1.25ms
+            if fc % 2 == 0:
+                lv.task_handler()
             # 睡眠固定 5ms(2026-08-12 对齐 face):K230 time.sleep_ms 忙等,
             # LVGL 建议的动态空转(约 30ms)是忙等热源;固定 5ms 降温 5~6°C
             time.sleep_ms(5)
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(),
+                                                   len(_last_slots or [])))
+            # DVFS 温度保护(2026-08-13 根治):每 30 帧读温调频,不拉长检测间隔(锁框跟手)
+            if _guard is not None and fc % 30 == 0:
+                _guard.tick(read_temperature())
             if fc % 30 == 0:
                 print("[gesture_detect] fc=%d" % fc)
                 if fc % 300 == 0:

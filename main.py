@@ -63,6 +63,24 @@ def _clear_next_script():
         pass
 
 
+# 当前运行模式(run_menu="main_menu"/run_script=category_id)。同模式远程切换
+# 判断用(2026-08-13):目标模式==当前模式 → 不 reset(保持不动)。
+_current_category = None
+
+
+def _remote_switch_tag_fn(option):
+    """同模式(tag_detect)快捷切换:不 reset,直接切底部 AprilTag/QR 功能选择。
+
+    scripts.tag_detect.app 已在运行中(同模块缓存),remote_switch_fn 内部走
+    _switch_fn(改内存+置 dirty+UI 高亮),dirty 由 tag_detect 主循环落盘 .tag_fn。
+    """
+    try:
+        from scripts.tag_detect import app as _tag_app
+        _tag_app.remote_switch_fn(option)
+    except Exception as e:
+        print("[CamerAi] tag fn switch failed: %s" % e)
+
+
 def _on_remote_switch(category, option=None):
     """主机远程切换脚本回调(HostAPI 解析命令帧后调用)。
 
@@ -71,7 +89,18 @@ def _on_remote_switch(category, option=None):
     option 非 None → 标签识别快捷切换(mode 0x14/0x15):先把子功能写入
     .tag_fn(tag_detect 启动时按此记忆启动),再按原链路切脚本。
     复用菜单点击路径(_write_next_script + machine.reset),与本地点击一致。
+
+    同模式(2026-08-13):目标模式==当前模式 → 不 reset。tag_detect 带子功能
+    → 直接切底部功能选择(remote_switch_fn);其它模式忽略(保持不动)。
     """
+    current = _current_category
+    if category is not None and category == current:
+        if category == "tag_detect" and option is not None:
+            print("[CamerAi] same-mode tag fn switch -> %s" % option)
+            _remote_switch_tag_fn(option)
+        else:
+            print("[CamerAi] same-mode switch ignored: %s" % category)
+        return
     print("[CamerAi] remote switch -> %s" % ("main_menu" if category is None else category))
     if option is not None:
         try:
@@ -126,6 +155,8 @@ def _load_script(category_id):
 
 
 def run_menu():
+    global _current_category
+    _current_category = "main_menu"
     from core.app_runtime import AppRuntime
     from ui.main_menu import MainMenu
     from ui.boot_splash import BootSplash
@@ -177,7 +208,10 @@ def run_menu():
             menu.diag_after_task_handler()
             menu.tick()  # 延迟吸附到期检查(连续滑动时手势优先,松手后才吸附)
             runtime.host_tick()
-            time.sleep_ms(_th if _th > 0 else 5)
+            # 固定 5ms(2026-08-13 对齐脚本模式):K230 time.sleep_ms 忙等,
+            # LVGL 建议 sleep(_th) 动态空转(~30ms)是忙等热源 + 降低 task_handler
+            # 频率致滚动事件处理不及时(卡顿)。固定 5ms 降温 + 滚动更跟手。
+            time.sleep_ms(5)
         except Exception as e:
             print("[CamerAi] run_menu loop error: %s" % e)
             import sys as _sys
@@ -188,6 +222,8 @@ def run_menu():
 
 
 def run_script(category_id):
+    global _current_category
+    _current_category = category_id
     from core.app_runtime import AppRuntime
     print("[CamerAi] run_script start: %s" % category_id)
     fpioa = FPIOA()

@@ -22,6 +22,8 @@ from media.display import Display
 from media.sensor import CAM_CHN_ID_0, CAM_CHN_ID_1
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
+from core.status_hud import status_text
+from core.diagnostics import read_temperature
 from ui.theme import Colors, make_back_bar_text_style
 
 
@@ -65,6 +67,7 @@ _timer_label = None
 _shutter_btn = None
 _mode_green_dot = None
 _title_label = None
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 
 # 录像相关
 _record_start_ticks = 0
@@ -134,11 +137,13 @@ def run(runtime):
     单线程主循环:chn0 预览帧 → OSD1 + 状态业务(录像计时/白闪) + task_handler。
     触摸返回钮设 exit_flag → 循环退出 → _destroy_ui → main.py cleanup+reset 回菜单。
     """
-    global _RUNTIME, _state
+    global _RUNTIME, _state, _hud_t0
     _RUNTIME = runtime
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     _state = STATE_PHOTO
     exit_flag = [False]
     _build_ui(runtime, exit_flag)
+    fc = 0
     while not exit_flag[0]:
         os.exitpoint()
         # 推送相机帧到 OSD1 层(图库态不推)
@@ -157,6 +162,14 @@ def run(runtime):
         # use-after-free 死机,故 deferred 到主循环执行)
         _process_pending_deletes()
         runtime.host_tick()
+        fc += 1
+        # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+        if _status_label is not None and fc % 30 == 0:
+            _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+            _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+            _hud_t0 = time.ticks_ms()
+            _status_label.set_text(status_text(runtime.lang, _hud_fps,
+                                               read_temperature(), 0))
         time.sleep_ms(lv.task_handler())
     _destroy_ui()
 
@@ -230,6 +243,14 @@ def _build_top_bar(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     title.add_style(make_back_bar_text_style(fonts.body), 0)
     _title_label = title
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    global _status_label
+    _status_label = lv.label(bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
 
 def _build_preview_area():

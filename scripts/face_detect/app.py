@@ -18,7 +18,9 @@ from core.font_manager import fonts
 from core.face_ai import FaceDetectionApp, FaceRegistrationApp, RGB888P_SIZE, DISPLAY_SIZE
 from core.face_db import face_db, database_search
 from core.id_registry import IdRegistry
-from core.diagnostics import diag_line
+from core.diagnostics import diag_line, read_temperature
+from core.status_hud import status_text
+from core.thermal import ThermalGuard
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -49,6 +51,8 @@ TRACK_RADIUS = 80    # 非识别帧 ID 关联半径(chn2 1024x768 像素;人脸�
 LEARNED_FLAG = 0x80
 
 _RUNTIME = None
+_guard = None  # DVFS 温度保护(ThermalGuard,2026-08-13 根治)
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -420,7 +424,7 @@ def _process_overlay_close():
 
 def _build_ui(runtime, exit_flag):
     """Build top bar, transparent preview area, and empty bottom bar."""
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     screen.set_style_bg_opa(0, 0)
     screen.add_flag(lv.obj.FLAG.CLICKABLE)
@@ -480,6 +484,13 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    # (字体缺 温/目/°/· 字符 → 纯 ASCII 免重建字体;语言切换内容不变)
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     _preview = lv.obj(screen)
     _preview.set_size(lv.pct(100), PREVIEW_H)
@@ -559,8 +570,10 @@ def _destroy_ui():
 
 def run(runtime):
     """Entry point called by reset-framework main.py."""
-    global _RUNTIME, _pending_clear_flush
+    global _RUNTIME, _pending_clear_flush, _guard
     _RUNTIME = runtime
+    _guard = ThermalGuard()
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     exit_flag = [False]
     _init_ai()
     _init_registry(runtime.fpioa)
@@ -598,7 +611,9 @@ def run(runtime):
             if fc % 2 == 0:
                 gc.collect()
             _p4 = time.ticks_us()
-            if not DIAG_SKIP_LVGL:
+            # LVGL 每 2 帧刷新(2026-08-13 二轮):顶/底栏静态,框走 OSD1 不属 LVGL;
+            # 每帧 FULL 重渲染是 CPU 热源,lvtask ~2.5ms/帧 → 平均 1.25ms
+            if not DIAG_SKIP_LVGL and fc % 2 == 0:
                 lv.task_handler()
             _p4b = time.ticks_us()
             # 睡眠 5ms(2026-08-11 热源定位结论):K230 time.sleep_ms 忙等,
@@ -607,6 +622,17 @@ def run(runtime):
             time.sleep_ms(5)
             _p5 = time.ticks_us()
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(),
+                                                   len(_last_slots or [])))
+            # DVFS 温度保护(2026-08-13 根治):每 30 帧读温调频,不拉长检测间隔(锁框跟手)
+            if _guard is not None and fc % 30 == 0:
+                _guard.tick(read_temperature())
             # 30 帧窗口统计:on_min=普通帧、on_max=检测帧,补单帧打印盲区
             _on_us = _p2 - _p1
             _win_on_sum += _on_us

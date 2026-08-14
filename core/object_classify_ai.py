@@ -20,10 +20,12 @@ from libs.AI2D import Ai2d
 from libs.PipeLine import ScopedTiming
 from core.object_ai import ObjectDetectionApp, COCO_LABELS, configure_ai2d_input
 
-# 推理帧分辨率(单通道 2026-08-07:AI 直接吃 chn0 显示帧 VGA 640x480,无独立
-# 推理通道;历史 chn2 XGA 2.25MB/帧硬件 DMA 与显示 DMA 竞争累积致几分钟死机,
-# 已随 object_classify 单通道化根治;det 320 + rec 224 用 VGA 足够)
-RGB888P_SIZE = [640, 480]
+# 推理帧分辨率(2026-08-13 对齐 face/object/gesture/body):加 chn2 XGA 1024x768
+# RGBP888 硬件直出,AI 吃 chn2 planar(零软件重排)。历史单通道 chn0 VGA packed
+# 须 921KB 软件重排(on_max=136ms 卡顿);chn2 RGBP888 planar 直出零重排。
+# ⚠️ ISP chn2 不支持 VGA 小尺寸,配 XGA(坑#20)。rec 224 中心区域提特征用
+# XGA 源充足(中心 224×224 在 XGA 上对应 VGA 中心区域,显示缩放自动回 640x480)。
+RGB888P_SIZE = [1024, 768]
 DISPLAY_SIZE = [640, 480]
 
 # kmodel 路径(匹配 demo 存放位置;同 object_ai / body_ai)

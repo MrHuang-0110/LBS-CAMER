@@ -15,6 +15,8 @@ from media.display import Display
 from media.sensor import CAM_CHN_ID_0
 from core.icon_cache import icon_cache
 from core.font_manager import fonts
+from core.status_hud import status_text
+from core.diagnostics import read_temperature
 
 BAR_H = 52
 PREVIEW_Y = BAR_H
@@ -26,6 +28,7 @@ BAR_BG = 0x1A1A1A
 _DETECTION_ENABLED = False
 
 _RUNTIME = None
+_status_label = None  # 顶栏状态小字(帧率/温度/目标数,2026-08-13)
 _screen = None
 _top_bar = None
 _bottom_bar = None
@@ -38,7 +41,7 @@ def _build_ui(runtime, exit_flag):
     返回钮 CLICKED 回调设 exit_flag[0]=True(只设标志,不做重操作)。
     返回钮用通用 get_back_icon()(init_app 已无条件预读),无需 image_classify 专属图标。
     """
-    global _screen, _top_bar, _bottom_bar, _preview
+    global _screen, _top_bar, _bottom_bar, _preview, _status_label
     screen = lv.scr_act()
     # 屏幕透明:让 OSD1 摄像头画面透出;顶底栏自带不透明背景
     screen.set_style_bg_opa(0, 0)
@@ -99,6 +102,12 @@ def _build_ui(runtime, exit_flag):
     title.align(lv.ALIGN.CENTER, 0, 0)
     from ui.theme import make_back_bar_text_style
     title.add_style(make_back_bar_text_style(fonts.body), 0)
+
+    # 顶栏右侧状态小字(2026-08-13):帧率/温度/目标数,通用单位行
+    _status_label = lv.label(_top_bar)
+    _status_label.set_text("--fps --C -")
+    _status_label.align(lv.ALIGN.RIGHT_MID, -8, 0)
+    _status_label.add_style(make_back_bar_text_style(fonts.body), 0)
 
     # ── 预览区:透明,透出 OSD1 摄像头画面 ──
     _preview = lv.obj(screen)
@@ -167,8 +176,9 @@ def run(runtime):
     单线程主循环:snapshot → on_frame(try/except) → show_image(OSD1) → task_handler。
     触摸返回钮设 exit_flag → 循环退出 → _destroy_ui → main.py cleanup+reset 回菜单。
     """
-    global _RUNTIME
+    global _RUNTIME, _hud_t0
     _RUNTIME = runtime
+    _hud_t0 = time.ticks_ms()  # 状态栏 fps 窗口起点(2026-08-13)
     exit_flag = [False]
     _build_ui(runtime, exit_flag)
     fc = 0
@@ -187,6 +197,13 @@ def run(runtime):
             Display.show_image(img, 0, 0, Display.LAYER_OSD1)
             time.sleep_ms(lv.task_handler())
             fc += 1
+            # 顶栏状态小字(~1s 一次):帧率/温度/目标数(2026-08-13)
+            if _status_label is not None and fc % 30 == 0:
+                _hud_el = time.ticks_diff(time.ticks_ms(), _hud_t0)
+                _hud_fps = 30 * 1000 // _hud_el if _hud_el > 0 else 0
+                _hud_t0 = time.ticks_ms()
+                _status_label.set_text(status_text(_RUNTIME.lang, _hud_fps,
+                                                   read_temperature(), 0))
             if fc % 30 == 0:
                 print("[image_classify] fc=%d" % fc)
     finally:

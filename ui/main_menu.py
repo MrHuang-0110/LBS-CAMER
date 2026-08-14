@@ -48,8 +48,13 @@ OPA_NORMAL = 153    # 60% of 255
 OPA_SELECTED = 255   # 100%
 
 SCROLL_SNAP_TIME = 160  # 吸附动画时长 (ms)
-SCROLL_SNAP_DELAY = 90  # 触摸释放后延迟开始吸附 (ms)
+SCROLL_SNAP_DELAY = 60  # 触摸释放后延迟开始吸附 (ms) — 2026-08-13 90→60 更跟手
 GEOM_ANIM_TIME = 280     # 卡片宽窄/位置过渡动画时长(ms),ease_out 顺滑
+
+# 滚动视觉时间节流(2026-08-13):SCROLL 事件高频触发,每事件全量重绘最近 3 张卡
+# 的 transform_zoom(LVGL 最贵操作)致卡顿。限制视觉更新 ≤60fps(16ms 间隔),
+# 重绘次数大减;_snap_pending_at=0 仍每事件清(手势优先契约不破坏)。
+SCROLL_VISUAL_THROTTLE_MS = 16
 
 # Board diagnostic: prints once per second while menu is alive. Keep False for normal builds.
 MENU_DIAG_MEM = False
@@ -90,6 +95,7 @@ class MainMenu:
         self._scroll_end_cb = None
         self._scroll_press_cb = None
         self._snap_pending_at = 0   # 延迟吸附到期时刻(ticks_ms),0=无待执行吸附
+        self._scroll_visual_last_ms = 0  # 滚动视觉节流上次更新时刻(2026-08-13)
         self._diag_last_ms = 0
         self._diag_seq = 0
 
@@ -284,11 +290,15 @@ class MainMenu:
     def _on_scroll(self, event):
         """滚动中：按卡片距视口中心的距离更新视觉，不创建 Python 动画。
 
-        滚动中清除待执行吸附：_cancel_scroll_anim 终止动画会再触发
-        SCROLL_END 重设 pending,此处清掉避免拖动中被 tick 抢走吸附。
+        时间节流(2026-08-13):SCROLL 事件高频触发,每事件重绘最近 3 张卡
+        transform_zoom 致卡顿。距上次视觉更新 <16ms 跳过 _apply_scroll_visuals
+        (≤60fps),重绘次数大减。_snap_pending_at=0 仍每事件清(连续滑动手势优先)。
         """
         self._snap_pending_at = 0
-        self._apply_scroll_visuals(update_selection=True)
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self._scroll_visual_last_ms) >= SCROLL_VISUAL_THROTTLE_MS:
+            self._scroll_visual_last_ms = now
+            self._apply_scroll_visuals(update_selection=True)
         self._diag_mem_tick("scroll")
 
     def _on_scroll_end(self, event):
@@ -330,24 +340,28 @@ class MainMenu:
     # ── 吸附逻辑 ──────────────────────────────────────
 
     def _apply_scroll_visuals(self, update_selection=False):
-        """DurUI 风格滚动视觉：只更新已有对象，避免滚动时分配 Python 回调。"""
+        """DurUI 风格滚动视觉：只更新已有对象，避免滚动时分配 Python 回调。
+
+        范围遍历(2026-08-13):只处理最近 3 张卡(nearest-1..nearest+1),其余
+        完全跳过(离屏卡一旦 t=1.0 不会变,无需每帧重设)。原 else 分支遍历
+        全部卡调 apply_scroll_visual(1.0) 是滚动卡顿次因。
+        """
         if not self._cards:
             return
+        n = len(self._cards)
         center_y = self._scroll.get_scroll_y() + self._scroll.get_height() // 2
         nearest_idx = self._find_nearest(center_y)
         step = CARD_H + CARD_GAP
-        # 优化:只处理最近 3 张卡片(选中 + 前后各 1),其余保持非选中态,
-        # 减少每帧遍历全部卡片的 LVGL style 设定开销(K230 单核性能有限)。
-        for i, card in enumerate(self._cards):
-            if abs(i - nearest_idx) <= 1:
-                card_cy = card.y + CARD_H // 2
-                dist = abs(card_cy - center_y)
-                t = dist / float(step)
-                if t > 1.0:
-                    t = 1.0
-                card.apply_scroll_visual(t)
-            else:
-                card.apply_scroll_visual(1.0)
+        lo = max(0, nearest_idx - 1)
+        hi = min(n, nearest_idx + 2)
+        for i in range(lo, hi):
+            card = self._cards[i]
+            card_cy = card.y + CARD_H // 2
+            dist = abs(card_cy - center_y)
+            t = dist / float(step)
+            if t > 1.0:
+                t = 1.0
+            card.apply_scroll_visual(t)
         if update_selection:
             self._selected_index = nearest_idx
 
