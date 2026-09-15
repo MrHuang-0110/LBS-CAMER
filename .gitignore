@@ -35,6 +35,10 @@ reousrce/
 .superpowers/
 .reasonix/
 .idea/
+.zcode/
+
+# ===== .mpy 发布构建产物（不入库） =====
+dist/
 
 # ===== 项目工具/文档/测试（不入库，仓库只放板端运行代码） =====
 demo/
