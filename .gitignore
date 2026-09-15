@@ -40,6 +40,9 @@ reousrce/
 # ===== .mpy 发布构建产物（不入库） =====
 dist/
 
+# ===== 代码索引缓存 / codegraph cache =====
+.codegraph/
+
 # ===== 项目工具/文档/测试（不入库，仓库只放板端运行代码） =====
 demo/
 tools/
