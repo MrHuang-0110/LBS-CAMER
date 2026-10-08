@@ -63,3 +63,12 @@ AIBase.py
 K230D_API.md
 人脸脚本运行日志.md
 最新人脸识别日志.txt
+
+# ===== 文档/记录/协议/死资源（不入库：仓库只放板端运行源码） =====
+# 以下文件此前被跟踪，本轮从索引移出（本机保留）；项目记录.md 见上方同名条目。
+AGENTS.md
+通讯协议.txt
+resource/font/FONTS.txt
+resource/icons/ICON.txt
+resource/icon/ICON.txt
+resource/font/_test_ascii_only.bin
