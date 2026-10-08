@@ -55,3 +55,11 @@ test_face_baseline_camerai_sensor.py
 test_face_baseline_with_menu_sim.py
 main_menu_durui_probe.py
 skills-lock.json
+
+# ===== CanMV SDK 参考副本 / 串口原始日志（不入库：非本项目板端运行代码） =====
+# 板端实际 import 的是 libs.AIBase / libs.AI2D（随固件在板上），根目录这两份是调试期对照副本
+AI2D.py
+AIBase.py
+K230D_API.md
+人脸脚本运行日志.md
+最新人脸识别日志.txt
