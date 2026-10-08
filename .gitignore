@@ -72,3 +72,6 @@ resource/font/FONTS.txt
 resource/icons/ICON.txt
 resource/icon/ICON.txt
 resource/font/_test_ascii_only.bin
+
+# ===== 交接文档（不入库：随目录一并移交） =====
+交接文档.md
